@@ -1,0 +1,19 @@
+[submodule "thirdparty/chipyard"]
+	path = thirdparty/chipyard
+	url = https://github.com/shirohasuki/chipyard
+[submodule "arch/buckyball"]
+	path = arch/buckyball
+	url = https://github.com/shirohasuki/buckyball.git
+[submodule "bebop-test"]
+	path = bebop-test
+	url = https://github.com/shirohasuki/bebop-test.git
+[submodule "compiler/buddy-mlir"]
+	path = compiler/buddy-mlir
+	url = https://github.com/SEU-ACAL/tapeout-Compiler.git
+  branch = voyager
+[submodule "tapeout"]
+	path = tapeout
+	url = https://github.com/shirohasuki/bebop-tapeout.git
+[submodule "tools/vistools"]
+	path = tools/vistools
+	url = https://github.com/shirohasuki/bebop-vistools.git
