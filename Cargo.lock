@@ -141,6 +141,7 @@ dependencies = [
  "bebop-bemu-profile",
  "bebop-dtb",
  "bebop-elf",
+ "bebop-rushb",
  "bebop-syscall",
  "bebop-uart",
  "cc",
@@ -190,6 +191,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "bebop-rushb"
+version = "0.1.0"
+
+[[package]]
 name = "bebop-syscall"
 version = "0.1.0"
 dependencies = [
@@ -207,6 +212,7 @@ dependencies = [
  "bebop-dasm",
  "bebop-fd-redirect",
  "bebop-rtl-trace",
+ "bebop-rushb",
  "bebop-uart",
  "cc",
  "ctrlc",

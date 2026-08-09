@@ -17,6 +17,7 @@ bebop-dtb = { path = "../lib/dtb" }
 bebop-uart = { path = "../lib/uart" }
 bebop-bank-hash = { path = "../lib/bank-hash" }
 bebop-bemu-profile = { path = "../lib/bemu-profile" }
+bebop-rushb = { path = "../lib/rushB" }
 
 [build-dependencies]
 cc = { version = "1", features = ["parallel"] }

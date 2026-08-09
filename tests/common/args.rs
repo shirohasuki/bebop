@@ -7,8 +7,6 @@ const ENV_WORKLOAD_TOML: &str = "BEBOP_WORKLOAD_TOML";
 const ENV_BB_TESTS_ROOT: &str = "BEBOP_BB_TESTS_ROOT";
 #[cfg(feature = "p2e")]
 const ENV_P2E_BITSTREAM: &str = "BEBOP_P2E_BITSTREAM";
-#[cfg(feature = "p2e")]
-const ENV_P2E_BUILD_DIR: &str = "BEBOP_P2E_BUILD_DIR";
 
 #[derive(Parser, Debug, Clone)]
 #[command(name = "elf-regression")]
@@ -73,12 +71,6 @@ impl RegressionArgs {
     #[cfg(feature = "p2e")]
     pub fn p2e_bitstream(&self) -> Option<PathBuf> {
         std::env::var_os(ENV_P2E_BITSTREAM).map(PathBuf::from)
-    }
-
-    /// P2E build dir read from BEBOP_P2E_BUILD_DIR env var.
-    #[cfg(feature = "p2e")]
-    pub fn p2e_build_dir(&self) -> Option<PathBuf> {
-        std::env::var_os(ENV_P2E_BUILD_DIR).map(PathBuf::from)
     }
 
     pub fn libtest_forward_flags(&self) -> Vec<String> {

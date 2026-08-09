@@ -23,11 +23,13 @@ fn run() -> Result<(), String> {
         .ok_or_else(|| "missing required argument --log-dir".to_string())?;
 
     let trace_config = TraceConfig::new(false, false);
-    let mut bemu = BemuInstance::new(&log_dir, trace_config, false, false).map_err(|e| e.to_string())?;
+    let mut bemu = BemuInstance::new(&log_dir, trace_config, false, false, 1).map_err(|e| e.to_string())?;
     bemu.load_elf(&elf).map_err(|e| e.to_string())?;
     bemu.init_hart(args.pk).map_err(|e| e.to_string())?;
-    while !bemu.finished() {
-        bemu.step().map_err(|e| e.to_string())?;
+    loop {
+        if bemu.step().map_err(|e| e.to_string())? {
+            break;
+        }
     }
 
     let exit_code = bemu.exit_code().unwrap_or(0);

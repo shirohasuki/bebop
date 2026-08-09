@@ -36,6 +36,22 @@ extern "C" {
     pub fn verilator_top_set_clock(top: *mut VerilatorTop, val: u8);
     pub fn verilator_top_set_reset(top: *mut VerilatorTop, val: u8);
 
+    // Host-rush command bridge.
+    pub fn verilator_host_rush_clear();
+    pub fn verilator_host_rush_submit(accelerator_id: u32, xs1: u64, xs2: u64, funct7: u32);
+    pub fn verilator_host_rush_accepted(accelerator_id: u32) -> u64;
+    pub fn verilator_host_rush_complete_on_accept(accelerator_id: u32);
+    pub fn verilator_host_rush_complete(accelerator_id: u32) -> bool;
+    pub fn verilator_host_rush_probes(accelerator_id: u32) -> u64;
+    pub fn verilator_host_rush_last_ready(accelerator_id: u32) -> bool;
+    pub fn verilator_host_rush_last_retired(accelerator_id: u32) -> bool;
+
+    // BBSimDRAM host staging API. These functions reject addresses outside
+    // the physical backing region instead of exposing its raw mmap pointer.
+    pub fn bbsim_host_memory_range(chip_id: i32, base: *mut u64, size: *mut u64) -> bool;
+    pub fn bbsim_host_memory_write(chip_id: i32, address: u64, src: *const u8, size: u64) -> bool;
+    pub fn bbsim_host_memory_read(chip_id: i32, address: u64, dst: *mut u8, size: u64) -> bool;
+
     // SCU state query (DPI-C functions are called from RTL automatically)
     pub fn verilator_scu_has_exit() -> bool;
     pub fn verilator_scu_exit_code() -> i32;

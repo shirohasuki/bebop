@@ -63,17 +63,22 @@ impl Simulator {
 
     fn reset(&mut self) {
         unsafe {
+            // Chipyard reset synchronizers need multiple source-clock edges
+            // before their downstream domains can leave reset. A single edge
+            // leaves host-driven Frontend state indeterminate because there is
+            // no Rocket instruction stream to provide a later reset sequence.
             verilator_top_set_reset(self.top, 1);
-            verilator_top_set_clock(self.top, 0);
-            self.step_and_dump();
-
-            verilator_top_set_reset(self.top, 1);
-            verilator_top_set_clock(self.top, 1);
-            self.step_and_dump();
+            for _ in 0..5 {
+                verilator_top_set_clock(self.top, 0);
+                self.step_and_dump();
+                verilator_top_set_clock(self.top, 1);
+                self.step_and_dump();
+            }
 
             verilator_top_set_reset(self.top, 0);
             verilator_top_set_clock(self.top, 0);
             self.step_and_dump();
+            self.exec_once();
         }
     }
 
@@ -117,6 +122,10 @@ impl Simulator {
                 verilator_trace_close(self.trace);
             }
         }
+    }
+
+    pub(crate) fn context_for_host_rush(&self) -> *mut VerilatorContext {
+        self.context
     }
 }
 

@@ -29,14 +29,14 @@ pub fn build(command: BuildCommand) -> Result<(), Whatever> {
 
             let features = if diff { "verilator,bemu" } else { "verilator" };
             println!("Building {features}: {} -> {}", rtl_dir.display(), out_dir.display());
-            cmd!("cargo", "build", "--bin", "bebop", "--features", features)
+            cmd!("cargo", "build", "--release", "--bin", "bebop", "--features", features)
                 .env("VSRC_PATH", &rtl_dir)
                 .run()
                 .whatever_context("failed to build bebop")?;
 
             // copy the built executable to the output directory
             let dest = out_dir.join("bebop-verilator");
-            std::fs::copy("target/debug/bebop", &dest).whatever_context("failed to copy built executable")?;
+            std::fs::copy("target/release/bebop", &dest).whatever_context("failed to copy built executable")?;
             println!("Built executable: {}", dest.display());
             Ok(())
         }
@@ -51,7 +51,7 @@ pub fn build(command: BuildCommand) -> Result<(), Whatever> {
             std::fs::create_dir_all(&out_dir).whatever_context("failed to create output directory")?;
             println!("Building p2e: {} -> {}", rtl_dir.display(), out_dir.display());
             let features = "p2e";
-            cmd!("cargo", "build", "--bin", "bebop", "--features", features)
+            cmd!("cargo", "build", "--release", "--bin", "bebop", "--features", features)
                 .env("VSRC_PATH", &rtl_dir)
                 .env("OUT_PATH", &out_dir)
                 .run()
@@ -71,7 +71,7 @@ pub fn build(command: BuildCommand) -> Result<(), Whatever> {
 
                 // copy the built executable to the output directory
                 let dest = out_dir.join("bebop-p2e");
-                std::fs::copy("target/debug/bebop", &dest).whatever_context("failed to copy built executable")?;
+                std::fs::copy("target/release/bebop", &dest).whatever_context("failed to copy built executable")?;
                 println!("Built P2E runtime: {}", dest.display());
                 Ok(())
             }

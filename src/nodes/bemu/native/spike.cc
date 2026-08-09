@@ -90,6 +90,7 @@ struct spike_context_t {
     size_t mem_size = 0;
     uint64_t step_count = 0;
     uint64_t step_elapsed_ns = 0;
+    bool profile_enabled = false;
     reg_t prev_pc = 0;
     bool pk_mode = false;
     bool finished = false;
@@ -162,7 +163,8 @@ void* spike_create_raw(
     size_t mem_size,
     const char* log_path,
     uint8_t* uart_ptr,
-    void* emu_state
+    void* emu_state,
+    bool profile_enabled
 ) {
     init_crash_handler();
     ensure_buckyball_registered();
@@ -177,6 +179,7 @@ void* spike_create_raw(
     ctx->mem_ptr = mem_ptr;
     ctx->mem_size = mem_size;
     ctx->emu_state = emu_state;
+    ctx->profile_enabled = profile_enabled;
     current_emu_state = ctx->emu_state;
 
     if (!init_log(ctx, log_path)) {
@@ -393,6 +396,17 @@ static int handle_trap(spike_context_t* ctx, trap_t& trap) {
 }
 
 static int step_one_instruction(spike_context_t* ctx) {
+    if (!ctx->profile_enabled) {
+        int result = 0;
+        try {
+            ctx->proc->step(1);
+            ctx->step_count++;
+        } catch (trap_t& trap) {
+            result = handle_trap(ctx, trap);
+        }
+        return result;
+    }
+
     const auto started = std::chrono::steady_clock::now();
     int result = 0;
     try {

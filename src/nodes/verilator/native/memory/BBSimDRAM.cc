@@ -23,6 +23,60 @@ static bool use_dramsim = false;
 static std::vector<std::map<long long int, backing_data_t>> mem_data = {};
 static std::string elf_file = "";
 
+static backing_data_t *host_memory_region(int chip_id, uint64_t address,
+                                          uint64_t size, uint64_t *base_out) {
+  if (chip_id < 0 || chip_id >= static_cast<int>(mem_data.size()))
+    return nullptr;
+  if (size > UINT64_MAX - address)
+    return nullptr;
+  for (auto &entry : mem_data[chip_id]) {
+    const uint64_t base = static_cast<uint64_t>(entry.first);
+    const uint64_t end = base + entry.second.size;
+    if (end < base)
+      continue;
+    if (address >= base && address + size <= end) {
+      *base_out = base;
+      return &entry.second;
+    }
+  }
+  return nullptr;
+}
+
+extern "C" bool bbsim_host_memory_range(int chip_id, uint64_t *base,
+                                          uint64_t *size) {
+  if (base == nullptr || size == nullptr || chip_id < 0 ||
+      chip_id >= static_cast<int>(mem_data.size()) || mem_data[chip_id].empty())
+    return false;
+  const auto &entry = *mem_data[chip_id].begin();
+  *base = static_cast<uint64_t>(entry.first);
+  *size = entry.second.size;
+  return true;
+}
+
+extern "C" bool bbsim_host_memory_write(int chip_id, uint64_t address,
+                                          const void *src, uint64_t size) {
+  if (src == nullptr && size != 0)
+    return false;
+  uint64_t base = 0;
+  backing_data_t *region = host_memory_region(chip_id, address, size, &base);
+  if (region == nullptr)
+    return false;
+  memcpy(region->data + (address - base), src, size);
+  return true;
+}
+
+extern "C" bool bbsim_host_memory_read(int chip_id, uint64_t address,
+                                         void *dst, uint64_t size) {
+  if (dst == nullptr && size != 0)
+    return false;
+  uint64_t base = 0;
+  backing_data_t *region = host_memory_region(chip_id, address, size, &base);
+  if (region == nullptr)
+    return false;
+  memcpy(dst, region->data + (address - base), size);
+  return true;
+}
+
 static std::string default_dramsim3_config_dir() {
   const char *config_dir = getenv("DRAMSIM3_CONFIG_DIR");
   if (config_dir != nullptr && config_dir[0] != '\0')

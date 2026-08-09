@@ -1,4 +1,4 @@
-//! Low-overhead host-time accounting for BEMU runs.
+//! Host-time accounting for BEMU runs.
 
 use std::fmt::Write;
 use std::time::{Duration, Instant};

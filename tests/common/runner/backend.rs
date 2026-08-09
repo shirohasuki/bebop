@@ -120,13 +120,12 @@ impl BackendRunner for VerilatorBackend {
 #[derive(Clone, Debug)]
 pub struct P2eBackend {
     bitstream: PathBuf,
-    build_dir: PathBuf,
 }
 
 #[cfg(feature = "p2e")]
 impl P2eBackend {
-    pub fn new(bitstream: PathBuf, build_dir: PathBuf) -> Self {
-        Self { bitstream, build_dir }
+    pub fn new(bitstream: PathBuf) -> Self {
+        Self { bitstream }
     }
 }
 
@@ -140,12 +139,12 @@ impl BackendRunner for P2eBackend {
         "p2e test"
     }
 
-    fn build_command(&self, cmd: &mut Command, _bebop_bin: &Path, elf_path: &Path, _artifacts: &ArtifactManager) {
+    fn build_command(&self, cmd: &mut Command, _bebop_bin: &Path, elf_path: &Path, artifacts: &ArtifactManager) {
         cmd.arg("run");
         cmd.arg("p2e");
         cmd.arg("--image").arg(elf_path);
         cmd.arg("--bitstream").arg(&self.bitstream);
-        cmd.arg("--log-dir").arg(&self.build_dir);
+        cmd.arg("--log-dir").arg(artifacts.log_dir());
     }
 
     fn timeout(&self) -> Duration {
@@ -156,8 +155,9 @@ impl BackendRunner for P2eBackend {
         Some("hex")
     }
 
-    fn match_case(&self, _test_case: &ElfTestCase) -> bool {
-        true
+    fn match_case(&self, test_case: &ElfTestCase) -> bool {
+        test_case.stem.ends_with("singlecore-baremetal")
+            || (test_case.stem.starts_with("fw_payload-") && test_case.stem.ends_with("-pk"))
     }
 
     fn needs_log_dir(&self) -> bool {

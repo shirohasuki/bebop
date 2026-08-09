@@ -3,6 +3,7 @@ members = [
   ".",
   "src/nodes/lib/bank-hash",
   "src/nodes/lib/bemu-profile",
+  "src/nodes/lib/rushB",
   "src/nodes/lib/fd-redirect",
   "src/nodes/lib/rtl-trace",
   "src/nodes/lib/uart",

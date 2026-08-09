@@ -31,4 +31,5 @@ pub fn emit(manifest_dir: &Path, native_dir: &Path, topology_files: Vec<PathBuf>
     for path in ["rocc.cc", "spike.cc", "btif.cc", "btif.h"] {
         println!("cargo:rerun-if-changed={}", native_dir.join(path).display());
     }
+    println!("cargo:rerun-if-changed={}", native_dir.join("spike").display());
 }

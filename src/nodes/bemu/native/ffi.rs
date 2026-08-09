@@ -1,14 +1,17 @@
 use bebop_bank_hash::bank_hash;
 use bebop_bemu_profile::{BemuProfile, BemuProfileReport};
+use bebop_rushb::{DEFAULT_SELECTION, FUNCT7_MSET, FUNCT7_MVIN, FUNCT7_MVOUT, RushBSelection};
 use bebop_dtb::DtbBuilder;
 use bebop_elf::{load_elf, LoadInfo, TlsInfo};
 use bebop_syscall::{add_guest_mapping, handle_syscall_with_state, set_guest_mappings, SyscallState};
 use bebop_uart::Uart;
 use std::os::raw::{c_char, c_void};
 use std::path::Path;
+use std::slice;
+use std::sync::Mutex;
 use std::time::Duration;
 
-use crate::bank::{bank_num, bank_size, mmio_bank_num, mmio_bank_size, BankConfig, BankMap};
+use crate::bank::{bank_num, bank_size, mmio_bank_num, mmio_bank_size, BankConfig, BankMap, MATRIX_SIZE};
 use crate::inst;
 use crate::trace::{with_trace_ptr, TraceConfig, TraceState};
 
@@ -79,6 +82,188 @@ impl EmuState {
         self.total_lat = 0;
         self.npu_instruction_id = 0;
     }
+
+    // rushB never exposes guest DRAM. DMA commands use the host pointers
+    // supplied by the native lowering, so allocating BEMU's 1 GiB guest RAM
+    // would only add startup cost.
+    fn new_host() -> Self {
+        Self {
+            memory: Vec::new(),
+            banks: vec![vec![0; bank_size()]; bank_num()],
+            bank_cfgs: vec![BankConfig::default(); bank_num()],
+            bank_map: BankMap::new(bank_num()),
+            mmio_banks: vec![vec![0; mmio_bank_size()]; mmio_bank_num()],
+            mmio_region_table: vec![crate::inst::instruction::MmioRegion::default(); bank_num()],
+            total_lat: 0,
+            npu_instruction_id: 0,
+            uart: Uart::new(),
+            syscall: SyscallState::new(),
+            pk_vm: None,
+            trace: TraceState::default(),
+            profile: BemuProfile::new(false),
+        }
+    }
+}
+
+static HOST_STATE: once_cell::sync::Lazy<Mutex<Option<EmuState>>> = once_cell::sync::Lazy::new(|| Mutex::new(None));
+
+fn with_host_state<R>(f: impl FnOnce(&mut EmuState) -> R) -> R {
+    let mut guard = HOST_STATE.lock().expect("rushB BEMU state poisoned");
+    let state = guard.as_mut().expect("rushB is not initialized; call rushb_init first");
+    f(state)
+}
+
+fn host_execute(state: &mut EmuState, funct7: u32, xs1: u64, xs2: u64) -> u64 {
+    state.total_lat += inst::decode::cycles_after_issue(funct7, xs1, xs2);
+    let mut ctx = inst::instruction::ExecContext {
+        memory: &mut state.memory,
+        banks: &mut state.banks,
+        cfgs: &mut state.bank_cfgs,
+        bank_map: &mut state.bank_map,
+        mmio_banks: &mut state.mmio_banks,
+        mmio_region_table: &mut state.mmio_region_table,
+    };
+    inst::decode::execute_known(funct7, xs1, xs2, &mut ctx).unwrap_or_else(|| panic!("unknown funct7: {funct7}"))
+}
+
+fn host_mvin(state: &mut EmuState, xs1: u64, packed_xs2: u64, host_ptr: *const u8) {
+    use crate::inst::decode::{pbank, pbank_group, rs1_b0, rs1_iter, xs2_mem_stride};
+
+    assert!(!host_ptr.is_null(), "mvin: null host pointer");
+    let bank_id = rs1_b0(xs1);
+    let depth = rs1_iter(xs1);
+    let (_, stride) = xs2_mem_stride(packed_xs2);
+    assert!(bank_id < bank_num() as u64, "mvin: invalid bank_id {bank_id}");
+    assert!(depth > 0, "mvin: depth must be > 0");
+    assert!(stride > 0, "mvin: stride must be > 0");
+
+    let bi = bank_id as usize;
+    assert!(state.bank_cfgs[bi].allocated, "mvin: bank {bank_id} not allocated");
+    let cols = state.bank_cfgs[bi].cols;
+    let groups = cols.max(1) as usize;
+
+    unsafe {
+        if groups > 1 {
+            for row in 0..depth as usize {
+                for group in 0..groups {
+                    let p = pbank_group(&state.bank_map, bank_id, group as u64);
+                    let bank_offset = row * 16;
+                    assert!(bank_offset + 16 <= bank_size(), "mvin: bank range");
+                    let offset = row * groups * 16 * stride as usize + group * 16;
+                    state.banks[p][bank_offset..bank_offset + 16]
+                        .copy_from_slice(slice::from_raw_parts(host_ptr.add(offset), 16));
+                }
+            }
+        } else {
+            let p = pbank(&state.bank_map, bank_id);
+            let matrix_mode_acc = cols == 4 && depth <= MATRIX_SIZE as u64;
+            let line_bytes = if matrix_mode_acc { 64usize } else { 16usize };
+            for row in 0..depth as usize {
+                let bank_offset = row * line_bytes;
+                assert!(bank_offset + line_bytes <= bank_size(), "mvin: bank range");
+                let offset = row * line_bytes * stride as usize;
+                state.banks[p][bank_offset..bank_offset + line_bytes]
+                    .copy_from_slice(slice::from_raw_parts(host_ptr.add(offset), line_bytes));
+            }
+        }
+    }
+}
+
+fn host_mvout(state: &mut EmuState, xs1: u64, packed_xs2: u64, host_ptr: *mut u8) {
+    use crate::inst::decode::{pbank, pbank_group, rs1_b0, rs1_iter, xs2_mem_stride};
+
+    assert!(!host_ptr.is_null(), "mvout: null host pointer");
+    let bank_id = rs1_b0(xs1);
+    let depth = rs1_iter(xs1);
+    let (_, stride) = xs2_mem_stride(packed_xs2);
+    assert!(bank_id < bank_num() as u64, "mvout: invalid bank_id {bank_id}");
+    assert!(depth > 0, "mvout: depth must be > 0");
+    assert!(stride > 0, "mvout: stride must be > 0");
+
+    let bi = bank_id as usize;
+    assert!(state.bank_cfgs[bi].allocated, "mvout: bank {bank_id} not allocated");
+    let cols = state.bank_cfgs[bi].cols;
+    let groups = cols.max(1) as usize;
+
+    unsafe {
+        if groups > 1 {
+            for row in 0..depth as usize {
+                for group in 0..groups {
+                    let p = pbank_group(&state.bank_map, bank_id, group as u64);
+                    let bank_offset = row * 16;
+                    assert!(bank_offset + 16 <= bank_size(), "mvout: bank range");
+                    let offset = row * groups * 16 * stride as usize + group * 16;
+                    slice::from_raw_parts_mut(host_ptr.add(offset), 16)
+                        .copy_from_slice(&state.banks[p][bank_offset..bank_offset + 16]);
+                }
+            }
+        } else {
+            let p = pbank(&state.bank_map, bank_id);
+            let matrix_mode_acc = cols == 4 && depth <= MATRIX_SIZE as u64;
+            let line_bytes = if matrix_mode_acc { 64usize } else { 16usize };
+            for row in 0..depth as usize {
+                let bank_offset = row * line_bytes;
+                assert!(bank_offset + line_bytes <= bank_size(), "mvout: bank range");
+                let offset = row * line_bytes * stride as usize;
+                slice::from_raw_parts_mut(host_ptr.add(offset), line_bytes)
+                    .copy_from_slice(&state.banks[p][bank_offset..bank_offset + line_bytes]);
+            }
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn rushb_init() {
+    *HOST_STATE.lock().expect("rushB BEMU state poisoned") = Some(EmuState::new_host());
+}
+
+#[no_mangle]
+pub extern "C" fn rushb_select_accelerator(accelerator_id: u32, chip_id: i32) {
+    assert_eq!(
+        RushBSelection::new(accelerator_id, chip_id),
+        DEFAULT_SELECTION,
+        "rushB BEMU supports only accelerator 0 on chip 0"
+    );
+}
+
+#[no_mangle]
+pub extern "C" fn rushb_destroy() {
+    *HOST_STATE.lock().expect("rushB BEMU state poisoned") = None;
+}
+
+#[no_mangle]
+pub extern "C" fn rushb_mset(xs1: u64, xs2: u64) {
+    with_host_state(|state| {
+        host_execute(state, FUNCT7_MSET, xs1, xs2);
+    });
+}
+
+#[no_mangle]
+pub extern "C" fn rushb_mvin(xs1: u64, packed_xs2: u64, host_ptr: *const c_void) {
+    with_host_state(|state| {
+        state.total_lat += inst::decode::cycles_after_issue(FUNCT7_MVIN, xs1, packed_xs2);
+        host_mvin(state, xs1, packed_xs2, host_ptr.cast());
+    });
+}
+
+#[no_mangle]
+pub extern "C" fn rushb_mvout(xs1: u64, packed_xs2: u64, host_ptr: *mut c_void) {
+    with_host_state(|state| {
+        state.total_lat += inst::decode::cycles_after_issue(FUNCT7_MVOUT, xs1, packed_xs2);
+        host_mvout(state, xs1, packed_xs2, host_ptr.cast());
+    });
+}
+
+#[no_mangle]
+pub extern "C" fn rushb_custom(xs1: u64, xs2: u64, funct7: u32) {
+    with_host_state(|state| {
+        host_execute(state, funct7, xs1, xs2);
+    });
+}
+
+#[no_mangle]
+pub extern "C" fn rushb_cycles() -> u64 {
+    with_host_state(|state| state.total_lat)
 }
 
 #[derive(Clone, Copy)]
@@ -455,6 +640,7 @@ extern "C" {
         log_path: *const c_char,
         uart_ptr: *mut u8,
         emu_state: *mut c_void,
+        profile: bool,
     ) -> *mut c_void;
     fn spike_init_hart_raw(
         ctx: *mut c_void,
@@ -560,6 +746,7 @@ pub fn create_spike(
             log_c.as_ref().map_or(std::ptr::null(), |path| path.as_ptr()),
             uart_ptr,
             state_ptr,
+            profile,
         )
     };
     if ctx.is_null() {

@@ -50,6 +50,12 @@ rec {
         sed -i 's/^\([[:space:]]*mabi := -mabi=\).*/\1lp64/' Makefile
       fi
 
+      # Newlib's assert.h can be included after pk's mtrap.h and overwrite
+      # pk's freestanding assert macro. Rename pk's private assertion API in
+      # the temporary source tree so it cannot collide with libc headers.
+      find ../machine ../pk ../bbl -type f \( -name '*.c' -o -name '*.h' \) \
+        -exec sed -i 's/\<assert[[:space:]]*(/pk_assert(/g' {} +
+
       make -j"$NIX_BUILD_CORES" march=-march=rv64gc_zicsr_zifencei mabi=-mabi=lp64
       make install
 
@@ -81,6 +87,7 @@ rec {
   buildInputs = [
     base.riscvGcc
     base.riscvBinutils
+    base.riscvLinuxGcc
     pkDrv
   ];
 

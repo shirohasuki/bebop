@@ -86,7 +86,9 @@ impl CycleTraceCollector {
 
         let depth = parse_usize(fields[1], "depth", line)?;
         if !(1..=MAX_TRACE_PATH_DEPTH).contains(&depth) {
-            return Err(format!("cycle trace path depth {depth} is out of range in record: {line}"));
+            return Err(format!(
+                "cycle trace path depth {depth} is out of range in record: {line}"
+            ));
         }
 
         let path = [
@@ -112,11 +114,8 @@ impl CycleTraceCollector {
             .join("-");
         let elapsed = end - start;
         let trace_path = self.cycle_dir.join(format!("trace-{path_key}.txt"));
-        fs::write(
-            &trace_path,
-            format!("start {start}\nend {end}\nelapsed {elapsed}\n"),
-        )
-        .map_err(|e| format!("failed to write cycle trace {}: {e}", trace_path.display()))?;
+        fs::write(&trace_path, format!("start {start}\nend {end}\nelapsed {elapsed}\n"))
+            .map_err(|e| format!("failed to write cycle trace {}: {e}", trace_path.display()))?;
 
         self.first_start = Some(self.first_start.map_or(start, |current| current.min(start)));
         self.last_end = Some(self.last_end.map_or(end, |current| current.max(end)));
