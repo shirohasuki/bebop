@@ -44,15 +44,10 @@ pub fn run(config: BemuRunConfig) -> Result<(), Whatever> {
         println!("[INFO] Running BEMU: elf={elf} log_dir={log_dir}");
 
         // Step 1: Initialize BEMU
-let mut trace_config = TraceConfig::new(false, false);
-trace_config.btrace = config.bank_digest;
+        let mut trace_config = TraceConfig::new(false, false);
+        trace_config.btrace = config.bank_digest;
 
-let mut bemu = BemuInstance::new(
-    &config.log_dir,
-    trace_config,
-    config.disasm,
-    config.tool_profile,
-)?;
+        let mut bemu = BemuInstance::new(&config.log_dir, trace_config, config.disasm, config.tool_profile)?;
 
         // Step 2: Load workload
         bemu.load_elf(&config.elf)?;

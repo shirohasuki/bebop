@@ -77,20 +77,20 @@ static bool g_has_exit = false;
 static std::mutex g_scu_mutex;
 
 // =============================================================================
-// Host-rush command state
+// rushB command state
 //
 // Commands are supplied by the Rust C ABI and consumed by one DPI bridge per
 // accelerator. The Verilator model is single-threaded; calls into this state
 // occur only while that model is being stepped.
 // =============================================================================
-struct HostRushCommand {
+struct RushBCommand {
   uint64_t xs1;
   uint64_t xs2;
   uint32_t funct7;
 };
 
-struct HostRushChannel {
-  std::optional<HostRushCommand> pending;
+struct RushBChannel {
+  std::optional<RushBCommand> pending;
   uint64_t probes = 0;
   uint64_t accepted = 0;
   bool last_ready = false;
@@ -99,33 +99,33 @@ struct HostRushChannel {
   bool complete = false;
 };
 
-static std::unordered_map<uint32_t, HostRushChannel> g_host_rush_channels;
+static std::unordered_map<uint32_t, RushBChannel> g_rushb_channels;
 
-extern "C" void verilator_host_rush_clear() { g_host_rush_channels.clear(); }
+extern "C" void verilator_rushb_clear() { g_rushb_channels.clear(); }
 
-extern "C" void verilator_host_rush_submit(uint32_t accelerator_id,
+extern "C" void verilator_rushb_submit(uint32_t accelerator_id,
                                            uint64_t xs1, uint64_t xs2,
                                            uint32_t funct7) {
-  auto &channel = g_host_rush_channels[accelerator_id];
+  auto &channel = g_rushb_channels[accelerator_id];
   if (channel.inflight || channel.pending.has_value()) {
     fprintf(stderr,
-            "verilator host-rush only permits one synchronous command per "
+            "verilator rushB only permits one synchronous command per "
             "accelerator\n");
     abort();
   }
-  channel.pending = HostRushCommand{xs1, xs2, funct7};
+  channel.pending = RushBCommand{xs1, xs2, funct7};
   channel.complete = false;
 }
 
-extern "C" void verilator_host_rush_peek(uint32_t accelerator_id,
+extern "C" void verilator_rushb_peek(uint32_t accelerator_id,
                                          uint8_t *valid, uint64_t *xs1,
                                          uint64_t *xs2, uint32_t *funct7) {
   if (valid == nullptr || xs1 == nullptr || xs2 == nullptr ||
       funct7 == nullptr) {
-    fprintf(stderr, "verilator_host_rush_peek received null output pointer\n");
+    fprintf(stderr, "verilator_rushb_peek received null output pointer\n");
     abort();
   }
-  auto &channel = g_host_rush_channels[accelerator_id];
+  auto &channel = g_rushb_channels[accelerator_id];
   channel.probes++;
   if (!channel.pending.has_value()) {
     *valid = 0;
@@ -141,17 +141,17 @@ extern "C" void verilator_host_rush_peek(uint32_t accelerator_id,
   *funct7 = cmd.funct7;
 }
 
-extern "C" void verilator_host_rush_observe(uint32_t accelerator_id,
+extern "C" void verilator_rushb_observe(uint32_t accelerator_id,
                                             uint8_t valid, uint8_t ready) {
-  auto &channel = g_host_rush_channels[accelerator_id];
+  auto &channel = g_rushb_channels[accelerator_id];
   (void)valid;
   channel.last_ready = ready != 0;
 }
 
-extern "C" void verilator_host_rush_accept(uint32_t accelerator_id) {
-  auto &channel = g_host_rush_channels[accelerator_id];
+extern "C" void verilator_rushb_accept(uint32_t accelerator_id) {
+  auto &channel = g_rushb_channels[accelerator_id];
   if (!channel.pending.has_value() || channel.inflight) {
-    fprintf(stderr, "verilator host-rush accepted an invalid command\n");
+    fprintf(stderr, "verilator rushB accepted an invalid command\n");
     abort();
   }
   channel.pending.reset();
@@ -161,26 +161,26 @@ extern "C" void verilator_host_rush_accept(uint32_t accelerator_id) {
 }
 
 extern "C" void
-verilator_host_rush_complete_on_accept(uint32_t accelerator_id) {
-  auto &channel = g_host_rush_channels[accelerator_id];
+verilator_rushb_complete_on_accept(uint32_t accelerator_id) {
+  auto &channel = g_rushb_channels[accelerator_id];
   if (!channel.inflight || channel.complete) {
     fprintf(stderr,
-            "verilator host-rush completed an invalid accepted command\n");
+            "verilator rushB completed an invalid accepted command\n");
     abort();
   }
   channel.inflight = false;
   channel.complete = true;
 }
 
-extern "C" void verilator_host_rush_report(uint32_t accelerator_id,
+extern "C" void verilator_rushb_report(uint32_t accelerator_id,
                                            uint8_t retired) {
-  auto &channel = g_host_rush_channels[accelerator_id];
+  auto &channel = g_rushb_channels[accelerator_id];
   channel.last_retired = retired != 0;
   if (!channel.inflight) {
     return;
   }
 
-  // Host-rush permits one command per accelerator, so a GlobalROB retirement
+  // rushB permits one command per accelerator, so a GlobalROB retirement
   // event is the exact completion signal for its in-flight host command.
   if (retired) {
     channel.inflight = false;
@@ -188,24 +188,24 @@ extern "C" void verilator_host_rush_report(uint32_t accelerator_id,
   }
 }
 
-extern "C" uint64_t verilator_host_rush_accepted(uint32_t accelerator_id) {
-  return g_host_rush_channels[accelerator_id].accepted;
+extern "C" uint64_t verilator_rushb_accepted(uint32_t accelerator_id) {
+  return g_rushb_channels[accelerator_id].accepted;
 }
 
-extern "C" bool verilator_host_rush_complete(uint32_t accelerator_id) {
-  return g_host_rush_channels[accelerator_id].complete;
+extern "C" bool verilator_rushb_complete(uint32_t accelerator_id) {
+  return g_rushb_channels[accelerator_id].complete;
 }
 
-extern "C" uint64_t verilator_host_rush_probes(uint32_t accelerator_id) {
-  return g_host_rush_channels[accelerator_id].probes;
+extern "C" uint64_t verilator_rushb_probes(uint32_t accelerator_id) {
+  return g_rushb_channels[accelerator_id].probes;
 }
 
-extern "C" bool verilator_host_rush_last_ready(uint32_t accelerator_id) {
-  return g_host_rush_channels[accelerator_id].last_ready;
+extern "C" bool verilator_rushb_last_ready(uint32_t accelerator_id) {
+  return g_rushb_channels[accelerator_id].last_ready;
 }
 
-extern "C" bool verilator_host_rush_last_retired(uint32_t accelerator_id) {
-  return g_host_rush_channels[accelerator_id].last_retired;
+extern "C" bool verilator_rushb_last_retired(uint32_t accelerator_id) {
+  return g_rushb_channels[accelerator_id].last_retired;
 }
 
 // =============================================================================

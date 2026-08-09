@@ -124,7 +124,7 @@ impl Simulator {
         }
     }
 
-    pub(crate) fn context_for_host_rush(&self) -> *mut VerilatorContext {
+    pub(crate) fn context_for_rushb(&self) -> *mut VerilatorContext {
         self.context
     }
 }

@@ -1,4 +1,4 @@
-use crate::ffi::verilator_host_rush_clear;
+use crate::ffi::verilator_rushb_clear;
 use crate::Simulator;
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -32,7 +32,7 @@ pub(crate) struct HostState {
     pub(crate) commands_submitted: u64,
 }
 
-// Simulator owns raw C++ pointers but all host-rush calls hold HOST_STATE.
+// Simulator owns raw C++ pointers but all rushB calls hold HOST_STATE.
 unsafe impl Send for HostState {}
 
 static HOST_STATE: Mutex<Option<HostState>> = Mutex::new(None);
@@ -49,7 +49,7 @@ pub(crate) fn accelerator_mut(state: &mut HostState, accelerator_id: u32) -> &mu
 pub(crate) fn init() {
     let mut slot = HOST_STATE.lock().expect("rushB Verilator state poisoned");
     assert!(slot.is_none(), "rushB Verilator is already initialized");
-    unsafe { verilator_host_rush_clear() };
+    unsafe { verilator_rushb_clear() };
 
     let mut simulator = Simulator::new(None, &[]).expect("failed to create rushB Verilator simulator");
     // Reset must reach BBSimDRAM before it can allocate its DPI backing store.
@@ -69,9 +69,9 @@ pub(crate) fn destroy() {
     if let Some(mut state) = slot.take() {
         state.simulator.finalize();
     }
-    unsafe { verilator_host_rush_clear() };
+    unsafe { verilator_rushb_clear() };
 }
 
 pub(crate) fn cycles() -> u64 {
-    with_state(|state| unsafe { crate::ffi::verilator_context_time(state.simulator.context_for_host_rush()) / 2 })
+    with_state(|state| unsafe { crate::ffi::verilator_context_time(state.simulator.context_for_rushb()) / 2 })
 }

@@ -36,15 +36,15 @@ extern "C" {
     pub fn verilator_top_set_clock(top: *mut VerilatorTop, val: u8);
     pub fn verilator_top_set_reset(top: *mut VerilatorTop, val: u8);
 
-    // Host-rush command bridge.
-    pub fn verilator_host_rush_clear();
-    pub fn verilator_host_rush_submit(accelerator_id: u32, xs1: u64, xs2: u64, funct7: u32);
-    pub fn verilator_host_rush_accepted(accelerator_id: u32) -> u64;
-    pub fn verilator_host_rush_complete_on_accept(accelerator_id: u32);
-    pub fn verilator_host_rush_complete(accelerator_id: u32) -> bool;
-    pub fn verilator_host_rush_probes(accelerator_id: u32) -> u64;
-    pub fn verilator_host_rush_last_ready(accelerator_id: u32) -> bool;
-    pub fn verilator_host_rush_last_retired(accelerator_id: u32) -> bool;
+    // rushB command bridge.
+    pub fn verilator_rushb_clear();
+    pub fn verilator_rushb_submit(accelerator_id: u32, xs1: u64, xs2: u64, funct7: u32);
+    pub fn verilator_rushb_accepted(accelerator_id: u32) -> u64;
+    pub fn verilator_rushb_complete_on_accept(accelerator_id: u32);
+    pub fn verilator_rushb_complete(accelerator_id: u32) -> bool;
+    pub fn verilator_rushb_probes(accelerator_id: u32) -> u64;
+    pub fn verilator_rushb_last_ready(accelerator_id: u32) -> bool;
+    pub fn verilator_rushb_last_retired(accelerator_id: u32) -> bool;
 
     // BBSimDRAM host staging API. These functions reject addresses outside
     // the physical backing region instead of exposing its raw mmap pointer.

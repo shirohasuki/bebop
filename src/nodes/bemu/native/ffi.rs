@@ -1,8 +1,8 @@
 use bebop_bank_hash::bank_hash;
 use bebop_bemu_profile::{BemuProfile, BemuProfileReport};
-use bebop_rushb::{DEFAULT_SELECTION, FUNCT7_MSET, FUNCT7_MVIN, FUNCT7_MVOUT, RushBSelection};
 use bebop_dtb::DtbBuilder;
 use bebop_elf::{load_elf, LoadInfo, TlsInfo};
+use bebop_rushb::{RushBSelection, DEFAULT_SELECTION, FUNCT7_MSET, FUNCT7_MVIN, FUNCT7_MVOUT};
 use bebop_syscall::{add_guest_mapping, handle_syscall_with_state, set_guest_mappings, SyscallState};
 use bebop_uart::Uart;
 use std::os::raw::{c_char, c_void};
@@ -121,18 +121,14 @@ fn host_execute(state: &mut EmuState, funct7: u32, xs1: u64, xs2: u64) -> u64 {
     state.bank_scoreboard.issue(instruction_id);
     let mut ctx = inst::instruction::ExecContext {
         memory: &mut state.memory,
-        banks: inst::instruction::TrackedBanks::new(
-            &mut state.banks,
-            Some(&state.bank_scoreboard),
-            instruction_id,
-        ),
+        banks: inst::instruction::TrackedBanks::new(&mut state.banks, Some(&state.bank_scoreboard), instruction_id),
         cfgs: &mut state.bank_cfgs,
         bank_map: &mut state.bank_map,
         mmio_banks: &mut state.mmio_banks,
         mmio_region_table: &mut state.mmio_region_table,
     };
-    let result = inst::decode::execute_known(funct7, xs1, xs2, &mut ctx)
-        .unwrap_or_else(|| panic!("unknown funct7: {funct7}"));
+    let result =
+        inst::decode::execute_known(funct7, xs1, xs2, &mut ctx).unwrap_or_else(|| panic!("unknown funct7: {funct7}"));
     drop(ctx);
     state.bank_scoreboard.complete(instruction_id);
     result

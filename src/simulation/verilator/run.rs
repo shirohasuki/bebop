@@ -311,7 +311,7 @@ impl DiffSession {
             .take()
             .expect("DiffTest worker exists")
             .join()
-                .map_err(|_| Whatever::without_source("Bank DiffTest M4 worker panicked".to_string()))?
+            .map_err(|_| Whatever::without_source("Bank DiffTest M4 worker panicked".to_string()))?
             .map_err(Whatever::without_source)?;
         println!(
             "Bank DiffTest runtime packets: submitted={} no_sink={} send_failed={}",
