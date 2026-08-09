@@ -114,21 +114,16 @@ pub fn run(config: VerilatorRunConfig) -> Result<(), Whatever> {
 
     let stdout_file = config.log_dir.join("stdout.log");
     let stderr_file = config.log_dir.join("stderr.log");
-let fst_file = config
-    .fst_dir
-    .as_ref()
-    .cloned()
-    .unwrap_or_else(|| config.log_dir.join("waveform"))
-    .join("waveform.fst");
+    let fst_file = config.log_dir.join("waveform").join("waveform.fst");
 
-#[cfg(feature = "bemu")]
-let bank_digest = config.diff.then(|| {
-    let (bank_size, row_bytes) = bebop_bemu::private_bank_geometry();
-    BankDigestConfig::new(bank_size, row_bytes)
-});
+    #[cfg(feature = "bemu")]
+    let bank_digest = config.diff.then(|| {
+        let (bank_size, row_bytes) = bebop_bemu::private_bank_geometry();
+        BankDigestConfig::new(bank_size, row_bytes)
+    });
 
-#[cfg(not(feature = "bemu"))]
-let bank_digest = None;
+    #[cfg(not(feature = "bemu"))]
+    let bank_digest = None;
     let trace_config = TraceConfig {
         itrace: config.trace.itrace,
         mtrace: config.trace.mtrace,
