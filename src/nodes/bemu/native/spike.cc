@@ -159,6 +159,7 @@ static void init_csrs(spike_context_t* ctx) {
 void* spike_create_raw(
     const char* isa,
     size_t procs,
+    size_t hart_id,
     uint8_t* mem_ptr,
     size_t mem_size,
     const char* log_path,
@@ -187,9 +188,9 @@ void* spike_create_raw(
         return nullptr;
     }
 
-    ctx->btif = new BTIF(mem_ptr, mem_size, uart_ptr, isa);
+    ctx->btif = new BTIF(mem_ptr, mem_size, uart_ptr, isa, hart_id);
     const char* final_isa = ctx->btif->get_cfg().isa;
-    ctx->proc = new processor_t(final_isa, "MSU", &ctx->btif->get_cfg(), ctx->btif, 0, false, ctx->log_file, std::cerr);
+    ctx->proc = new processor_t(final_isa, "MSU", &ctx->btif->get_cfg(), ctx->btif, hart_id, false, ctx->log_file, std::cerr);
     ctx->proc->reset();
 
     if (!check_buckyball_mounted(ctx)) {
@@ -494,6 +495,15 @@ int spike_exit_code_raw(void* raw_ctx) {
         return get_exit_code_ffi(ctx->emu_state);
     }
     return ctx->exit_code;
+}
+
+void spike_stop_raw(void* raw_ctx, int code) {
+    auto* ctx = reinterpret_cast<spike_context_t*>(raw_ctx);
+    if (ctx == nullptr) {
+        return;
+    }
+    ctx->finished = true;
+    ctx->exit_code = code;
 }
 
 uint64_t spike_step_elapsed_ns_raw(void* raw_ctx) {

@@ -17,7 +17,7 @@ constexpr uint64_t UART_SIZE = 0x100UL;
 // BEMU-Target Interface: the memory/MMIO surface that BEMU exposes to Spike.
 class BTIF : public simif_t {
 public:
-    BTIF(uint8_t* mem_ptr, size_t mem_size, uint8_t* uart_ptr, const char* isa);
+    BTIF(uint8_t* mem_ptr, size_t mem_size, uint8_t* uart_ptr, const char* isa, size_t hart_id);
 
     char* addr_to_mem(reg_t addr) override;
     bool mmio_load(reg_t addr, size_t len, uint8_t* bytes) override;

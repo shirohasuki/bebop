@@ -21,9 +21,10 @@
 
 use snafu::{OptionExt, ResultExt, Whatever};
 use std::path::Path;
+use std::sync::Arc;
 use std::time::Duration;
 
-use crate::{spike::SpikeInstance, trace::TraceConfig};
+use crate::{ffi::SharedMemory, spike::SpikeInstance, trace::TraceConfig};
 use bebop_bemu_profile::BemuProfileReport;
 
 pub struct BemuInstance {
@@ -32,8 +33,43 @@ pub struct BemuInstance {
 
 impl BemuInstance {
     pub fn new(log_dir: &Path, trace_config: TraceConfig, disasm: bool, profile: bool) -> Result<Self, Whatever> {
+        Self::new_with_core(log_dir, trace_config, disasm, profile, Path::new(crate::BEMU_TOP_CONFIG))
+    }
+
+    /// Create a worker bound to one concrete Core TOML. The caller must invoke
+    /// this on the worker thread; configuration is deliberately thread-local.
+    pub fn new_with_core(
+        log_dir: &Path,
+        trace_config: TraceConfig,
+        disasm: bool,
+        profile: bool,
+        core_config: &Path,
+    ) -> Result<Self, Whatever> {
+        Self::new_with_core_hart(log_dir, trace_config, disasm, profile, core_config, 0, None, None)
+    }
+
+    pub fn new_with_core_hart(
+        log_dir: &Path,
+        trace_config: TraceConfig,
+        disasm: bool,
+        profile: bool,
+        core_config: &Path,
+        hart_id: usize,
+        shared_memory: Option<Arc<SharedMemory>>,
+        virtual_bank_count: Option<usize>,
+    ) -> Result<Self, Whatever> {
+        let core_config = if core_config.is_absolute() {
+            core_config.to_path_buf()
+        } else {
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("src").join(core_config)
+        };
+        if let Some(virtual_bank_count) = virtual_bank_count {
+            crate::config::configure_with_virtual_bank_count(&core_config, virtual_bank_count);
+        } else {
+            crate::config::configure(&core_config);
+        }
         Ok(Self {
-            spike: SpikeInstance::new(log_dir, trace_config, disasm, profile)
+            spike: SpikeInstance::new(log_dir, trace_config, disasm, profile, hart_id, shared_memory)
                 .whatever_context("failed to create spike instance")?,
         })
     }
@@ -51,6 +87,14 @@ impl BemuInstance {
 
     pub fn step(&mut self) -> Result<(), Whatever> {
         self.spike.step().whatever_context("bemu step failed")
+    }
+
+    pub fn barrier_hit(&self) -> bool {
+        self.spike.barrier_hit()
+    }
+
+    pub fn stop(&mut self, code: i32) {
+        self.spike.stop(code);
     }
 
     pub fn finished(&self) -> bool {

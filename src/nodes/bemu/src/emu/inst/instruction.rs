@@ -150,6 +150,7 @@ pub struct ExecContext<'a> {
     pub bank_map: &'a mut BankMap,
     pub mmio_banks: &'a mut [Vec<u8>],
     pub mmio_region_table: &'a mut [MmioRegion],
+    pub barrier_hit: &'a mut bool,
 }
 
 #[cfg(test)]

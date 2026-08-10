@@ -64,10 +64,26 @@ pub(crate) fn staging_address(chip_id: i32, spans: &[(usize, usize)]) -> u64 {
 
 pub(crate) unsafe fn copy_to_staging(chip_id: i32, address: u64, host: *const u8, spans: &[(usize, usize)]) {
     assert!(!host.is_null(), "mvin host pointer is null");
+    eprintln!(
+        "[rushB dma] mvin staging chip={chip_id} addr=0x{address:x} spans={} first_host={:02x?}",
+        spans.len(),
+        std::slice::from_raw_parts(host, 16.min(spans.first().map(|s| s.1).unwrap_or(0)))
+    );
     for &(offset, size) in spans {
         assert!(
             bbsim_host_memory_write(chip_id, address + offset as u64, host.add(offset), size as u64),
             "mvin staging write exceeds BBSimDRAM"
+        );
+        let mut check = vec![0u8; size];
+        assert!(
+            bbsim_host_memory_read(chip_id, address + offset as u64, check.as_mut_ptr(), size as u64),
+            "mvin staging readback exceeds BBSimDRAM"
+        );
+        let expect = std::slice::from_raw_parts(host.add(offset), size);
+        assert_eq!(
+            check.as_slice(),
+            expect,
+            "mvin staging readback mismatch at offset {offset}"
         );
     }
 }

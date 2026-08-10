@@ -2,13 +2,16 @@ use bebop_bank_hash::bank_hash;
 use bebop_bemu_profile::{BemuProfile, BemuProfileReport};
 use bebop_dtb::DtbBuilder;
 use bebop_elf::{load_elf, LoadInfo, TlsInfo};
-use bebop_rushb::{RushBSelection, DEFAULT_SELECTION, FUNCT7_MSET, FUNCT7_MVIN, FUNCT7_MVOUT};
+use bebop_rushb::{FUNCT7_MSET, FUNCT7_MVIN, FUNCT7_MVOUT};
 use bebop_syscall::{add_guest_mapping, handle_syscall_with_state, set_guest_mappings, SyscallState};
 use bebop_uart::Uart;
+use std::cell::Cell;
+use std::collections::HashMap;
 use std::os::raw::{c_char, c_void};
 use std::path::Path;
 use std::slice;
-use std::sync::Mutex;
+use std::sync::{mpsc, Arc, Mutex};
+use std::thread;
 use std::time::Duration;
 
 use crate::bank::{bank_num, bank_size, mmio_bank_num, mmio_bank_size, BankConfig, BankMap, MATRIX_SIZE};
@@ -26,8 +29,124 @@ const PK_HIGH_RESERVE: u64 = 64 * 1024 * 1024;
 const SYS_BRK: u64 = 214;
 const SYS_MMAP: u64 = 222;
 
+pub struct SharedMemory {
+    data: std::cell::UnsafeCell<Vec<u8>>,
+    barrier: TileBarrier,
+}
+
+unsafe impl Send for SharedMemory {}
+unsafe impl Sync for SharedMemory {}
+
+impl SharedMemory {
+    pub fn new(size: usize, core_count: usize) -> Arc<Self> {
+        Arc::new(Self {
+            data: std::cell::UnsafeCell::new(vec![0; size]),
+            barrier: TileBarrier::new(core_count),
+        })
+    }
+
+    fn as_slice(&self) -> &[u8] {
+        unsafe { &*self.data.get() }
+    }
+
+    fn as_mut_slice(&self) -> &mut [u8] {
+        unsafe { &mut *self.data.get() }
+    }
+
+    pub fn wait_barrier(&self, hart_id: usize) {
+        self.barrier.wait(hart_id);
+    }
+
+    pub fn abort_barrier(&self) {
+        self.barrier.abort();
+    }
+}
+
+struct TileBarrier {
+    core_count: usize,
+    state: Mutex<(u64, Vec<usize>, bool)>,
+    ready: std::sync::Condvar,
+}
+
+impl TileBarrier {
+    fn new(core_count: usize) -> Self {
+        Self {
+            core_count,
+            state: Mutex::new((0, Vec::with_capacity(core_count), false)),
+            ready: std::sync::Condvar::new(),
+        }
+    }
+
+    fn wait(&self, hart_id: usize) {
+        let mut state = self.state.lock().expect("BEMU barrier poisoned");
+        let epoch = state.0;
+        if state.2 {
+            return;
+        }
+        if !state.1.contains(&hart_id) {
+            state.1.push(hart_id);
+        }
+        if state.1.len() == self.core_count {
+            state.0 = state.0.wrapping_add(1);
+            state.1.clear();
+            self.ready.notify_all();
+            return;
+        }
+        while state.0 == epoch && !state.2 {
+            state = self.ready.wait(state).expect("BEMU barrier poisoned");
+        }
+    }
+
+    fn abort(&self) {
+        let mut state = self.state.lock().expect("BEMU barrier poisoned");
+        state.2 = true;
+        self.ready.notify_all();
+    }
+}
+
+enum GuestMemory {
+    Owned(Vec<u8>),
+    Shared(Arc<SharedMemory>),
+}
+
+impl GuestMemory {
+    fn as_mut_ptr(&mut self) -> *mut u8 {
+        match self {
+            Self::Owned(memory) => memory.as_mut_ptr(),
+            Self::Shared(memory) => memory.as_mut_slice().as_mut_ptr(),
+        }
+    }
+
+    fn len(&self) -> usize {
+        match self {
+            Self::Owned(memory) => memory.len(),
+            Self::Shared(memory) => memory.as_slice().len(),
+        }
+    }
+}
+
+impl std::ops::Deref for GuestMemory {
+    type Target = [u8];
+
+    fn deref(&self) -> &Self::Target {
+        match self {
+            Self::Owned(memory) => memory,
+            Self::Shared(memory) => memory.as_slice(),
+        }
+    }
+}
+
+impl std::ops::DerefMut for GuestMemory {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        match self {
+            Self::Owned(memory) => memory,
+            Self::Shared(memory) => memory.as_mut_slice(),
+        }
+    }
+}
+
 struct EmuState {
-    memory: Vec<u8>,
+    memory: GuestMemory,
     banks: Vec<Vec<u8>>,
     bank_cfgs: Vec<BankConfig>,
     bank_map: BankMap,
@@ -36,21 +155,28 @@ struct EmuState {
     mmio_region_table: Vec<crate::inst::instruction::MmioRegion>,
     total_lat: u64,
     npu_instruction_id: u64,
+    matrix_instruction_count: u64,
     uart: Uart,
     syscall: SyscallState,
     pk_vm: Option<PkVm>,
     trace: TraceState,
     profile: BemuProfile,
+    barrier_hit: bool,
 }
 
 impl EmuState {
-    fn new(log_dir: &Path, trace_config: TraceConfig, profile: bool) -> Result<Self, String> {
+    fn new(
+        log_dir: &Path,
+        trace_config: TraceConfig,
+        profile: bool,
+        shared_memory: Option<Arc<SharedMemory>>,
+    ) -> Result<Self, String> {
         // 1GB Here is important, for baremetal mode, when we set this to 4GB,
         // it will running for a long time.
         const MEM_SIZE: usize = 1 << 30;
         Ok(Self {
             // memory is maintained by bemu not spike
-            memory: vec![0; MEM_SIZE],
+            memory: shared_memory.map_or_else(|| GuestMemory::Owned(vec![0; MEM_SIZE]), GuestMemory::Shared),
             banks: vec![vec![0; bank_size()]; bank_num()],
             bank_cfgs: vec![BankConfig::default(); bank_num()],
             bank_map: BankMap::new(bank_num()),
@@ -59,11 +185,13 @@ impl EmuState {
             mmio_region_table: vec![crate::inst::instruction::MmioRegion::default(); bank_num()],
             total_lat: 0,
             npu_instruction_id: 0,
+            matrix_instruction_count: 0,
             uart: Uart::new(),
             syscall: SyscallState::new(),
             pk_vm: None,
             trace: TraceState::new(log_dir, trace_config).map_err(|e| e.to_string())?,
             profile: BemuProfile::new(profile),
+            barrier_hit: false,
         })
     }
 
@@ -81,6 +209,7 @@ impl EmuState {
             .fill(crate::inst::instruction::MmioRegion::default());
         self.total_lat = 0;
         self.npu_instruction_id = 0;
+        self.matrix_instruction_count = 0;
     }
 
     // rushB never exposes guest DRAM. DMA commands use the host pointers
@@ -88,7 +217,7 @@ impl EmuState {
     // would only add startup cost.
     fn new_host() -> Self {
         Self {
-            memory: Vec::new(),
+            memory: GuestMemory::Owned(Vec::new()),
             banks: vec![vec![0; bank_size()]; bank_num()],
             bank_cfgs: vec![BankConfig::default(); bank_num()],
             bank_map: BankMap::new(bank_num()),
@@ -97,26 +226,102 @@ impl EmuState {
             mmio_region_table: vec![crate::inst::instruction::MmioRegion::default(); bank_num()],
             total_lat: 0,
             npu_instruction_id: 0,
+            matrix_instruction_count: 0,
             uart: Uart::new(),
             syscall: SyscallState::new(),
             pk_vm: None,
             trace: TraceState::default(),
             profile: BemuProfile::new(false),
+            barrier_hit: false,
         }
     }
 }
 
-static HOST_STATE: once_cell::sync::Lazy<Mutex<Option<EmuState>>> = once_cell::sync::Lazy::new(|| Mutex::new(None));
+enum HostCommand {
+    Execute { funct7: u32, xs1: u64, xs2: u64, reply: mpsc::Sender<u64> },
+    Mvin { xs1: u64, packed_xs2: u64, host_ptr: usize, reply: mpsc::Sender<()> },
+    Mvout { xs1: u64, packed_xs2: u64, host_ptr: usize, reply: mpsc::Sender<()> },
+    Cycles { reply: mpsc::Sender<u64> },
+    Shutdown,
+}
 
-fn with_host_state<R>(f: impl FnOnce(&mut EmuState) -> R) -> R {
+struct HostAccelerator {
+    chip_id: i32,
+    commands: mpsc::Sender<HostCommand>,
+    worker: thread::JoinHandle<()>,
+}
+
+struct HostState {
+    accelerators: HashMap<u32, HostAccelerator>,
+}
+
+static HOST_STATE: once_cell::sync::Lazy<Mutex<Option<HostState>>> =
+    once_cell::sync::Lazy::new(|| Mutex::new(None));
+
+thread_local! {
+    // Selection belongs to the host caller. A global selected Core would race
+    // when two host graph workers call the native ABI concurrently.
+    static HOST_SELECTION: Cell<(u32, i32)> = const { Cell::new((0, 0)) };
+}
+
+fn spawn_host_accelerator(accelerator_id: u32, chip_id: i32) -> HostAccelerator {
+    assert_eq!(chip_id, 0, "rushB BEMU supports tile chip_id 0 only");
+    let (commands, receiver) = mpsc::channel();
+    let worker = thread::Builder::new()
+        .name(format!("rushb-bemu-core-{accelerator_id}"))
+        .spawn(move || {
+            let mut state = EmuState::new_host();
+            while let Ok(command) = receiver.recv() {
+                match command {
+                    HostCommand::Execute { funct7, xs1, xs2, reply } => {
+                        let _ = reply.send(host_execute(&mut state, funct7, xs1, xs2));
+                    }
+                    HostCommand::Mvin { xs1, packed_xs2, host_ptr, reply } => {
+                        state.total_lat += inst::decode::cycles_after_issue(FUNCT7_MVIN, xs1, packed_xs2);
+                        host_mvin(&mut state, xs1, packed_xs2, host_ptr as *const u8);
+                        let _ = reply.send(());
+                    }
+                    HostCommand::Mvout { xs1, packed_xs2, host_ptr, reply } => {
+                        state.total_lat += inst::decode::cycles_after_issue(FUNCT7_MVOUT, xs1, packed_xs2);
+                        host_mvout(&mut state, xs1, packed_xs2, host_ptr as *mut u8);
+                        let _ = reply.send(());
+                    }
+                    HostCommand::Cycles { reply } => {
+                        let _ = reply.send(state.total_lat);
+                    }
+                    HostCommand::Shutdown => {
+                        eprintln!(
+                            "[INFO] rushB BEMU Core {accelerator_id}: instructions={} matrix={} cycles={}",
+                            state.npu_instruction_id,
+                            state.matrix_instruction_count,
+                            state.total_lat
+                        );
+                        break;
+                    }
+                }
+            }
+        })
+        .expect("failed to start rushB BEMU Core worker");
+    HostAccelerator { chip_id, commands, worker }
+}
+
+fn with_selected_accelerator<R>(f: impl FnOnce(&mpsc::Sender<HostCommand>) -> R) -> R {
+    let (accelerator_id, chip_id) = HOST_SELECTION.with(Cell::get);
     let mut guard = HOST_STATE.lock().expect("rushB BEMU state poisoned");
     let state = guard.as_mut().expect("rushB is not initialized; call rushb_init first");
-    f(state)
+    let accelerator = state.accelerators.entry(accelerator_id)
+        .or_insert_with(|| spawn_host_accelerator(accelerator_id, chip_id));
+    assert_eq!(accelerator.chip_id, chip_id, "rushB Core cannot move between chips");
+    f(&accelerator.commands)
 }
 
 fn host_execute(state: &mut EmuState, funct7: u32, xs1: u64, xs2: u64) -> u64 {
+    state.barrier_hit = false;
     state.total_lat += inst::decode::cycles_after_issue(funct7, xs1, xs2);
     state.npu_instruction_id = state.npu_instruction_id.wrapping_add(1);
+    if matches!(funct7, 65 | 66) {
+        state.matrix_instruction_count = state.matrix_instruction_count.wrapping_add(1);
+    }
     let instruction_id = state.npu_instruction_id;
     state.bank_scoreboard.issue(instruction_id);
     let mut ctx = inst::instruction::ExecContext {
@@ -126,6 +331,7 @@ fn host_execute(state: &mut EmuState, funct7: u32, xs1: u64, xs2: u64) -> u64 {
         bank_map: &mut state.bank_map,
         mmio_banks: &mut state.mmio_banks,
         mmio_region_table: &mut state.mmio_region_table,
+        barrier_hit: &mut state.barrier_hit,
     };
     let result =
         inst::decode::execute_known(funct7, xs1, xs2, &mut ctx).unwrap_or_else(|| panic!("unknown funct7: {funct7}"));
@@ -222,56 +428,82 @@ fn host_mvout(state: &mut EmuState, xs1: u64, packed_xs2: u64, host_ptr: *mut u8
 
 #[no_mangle]
 pub extern "C" fn rushb_init() {
-    *HOST_STATE.lock().expect("rushB BEMU state poisoned") = Some(EmuState::new_host());
+    let mut guard = HOST_STATE.lock().expect("rushB BEMU state poisoned");
+    assert!(guard.is_none(), "rushB BEMU is already initialized");
+    *guard = Some(HostState { accelerators: HashMap::new() });
+    HOST_SELECTION.with(|selection| selection.set((0, 0)));
 }
 
 #[no_mangle]
 pub extern "C" fn rushb_select_accelerator(accelerator_id: u32, chip_id: i32) {
-    assert_eq!(
-        RushBSelection::new(accelerator_id, chip_id),
-        DEFAULT_SELECTION,
-        "rushB BEMU supports only accelerator 0 on chip 0"
-    );
+    assert_eq!(chip_id, 0, "rushB BEMU supports tile chip_id 0 only");
+    HOST_SELECTION.with(|selection| selection.set((accelerator_id, chip_id)));
+    with_selected_accelerator(|_| {});
 }
 
 #[no_mangle]
 pub extern "C" fn rushb_destroy() {
-    *HOST_STATE.lock().expect("rushB BEMU state poisoned") = None;
+    let mut guard = HOST_STATE.lock().expect("rushB BEMU state poisoned");
+    if let Some(state) = guard.take() {
+        for accelerator in state.accelerators.into_values() {
+            let _ = accelerator.commands.send(HostCommand::Shutdown);
+            accelerator.worker.join().expect("rushB BEMU Core worker panicked");
+        }
+    }
 }
 
 #[no_mangle]
 pub extern "C" fn rushb_mset(xs1: u64, xs2: u64) {
-    with_host_state(|state| {
-        host_execute(state, FUNCT7_MSET, xs1, xs2);
+    with_selected_accelerator(|commands| {
+        let (reply, result) = mpsc::channel();
+        commands.send(HostCommand::Execute { funct7: FUNCT7_MSET, xs1, xs2, reply })
+            .expect("rushB BEMU Core worker stopped");
+        result.recv().expect("rushB BEMU Core worker stopped");
     });
 }
 
 #[no_mangle]
 pub extern "C" fn rushb_mvin(xs1: u64, packed_xs2: u64, host_ptr: *const c_void) {
-    with_host_state(|state| {
-        state.total_lat += inst::decode::cycles_after_issue(FUNCT7_MVIN, xs1, packed_xs2);
-        host_mvin(state, xs1, packed_xs2, host_ptr.cast());
+    with_selected_accelerator(|commands| {
+        let (reply, result) = mpsc::channel();
+        commands.send(HostCommand::Mvin {
+            xs1, packed_xs2, host_ptr: host_ptr as usize, reply,
+        }).expect("rushB BEMU Core worker stopped");
+        result.recv().expect("rushB BEMU Core worker stopped");
     });
 }
 
 #[no_mangle]
 pub extern "C" fn rushb_mvout(xs1: u64, packed_xs2: u64, host_ptr: *mut c_void) {
-    with_host_state(|state| {
-        state.total_lat += inst::decode::cycles_after_issue(FUNCT7_MVOUT, xs1, packed_xs2);
-        host_mvout(state, xs1, packed_xs2, host_ptr.cast());
+    with_selected_accelerator(|commands| {
+        let (reply, result) = mpsc::channel();
+        commands.send(HostCommand::Mvout {
+            xs1, packed_xs2, host_ptr: host_ptr as usize, reply,
+        }).expect("rushB BEMU Core worker stopped");
+        result.recv().expect("rushB BEMU Core worker stopped");
     });
 }
 
 #[no_mangle]
 pub extern "C" fn rushb_custom(xs1: u64, xs2: u64, funct7: u32) {
-    with_host_state(|state| {
-        host_execute(state, funct7, xs1, xs2);
+    with_selected_accelerator(|commands| {
+        let (reply, result) = mpsc::channel();
+        commands.send(HostCommand::Execute { funct7, xs1, xs2, reply })
+            .expect("rushB BEMU Core worker stopped");
+        result.recv().expect("rushB BEMU Core worker stopped");
     });
 }
 
 #[no_mangle]
 pub extern "C" fn rushb_cycles() -> u64 {
-    with_host_state(|state| state.total_lat)
+    let guard = HOST_STATE.lock().expect("rushB BEMU state poisoned");
+    let state = guard.as_ref().expect("rushB is not initialized; call rushb_init first");
+    state.accelerators.values().map(|accelerator| {
+        let (reply, result) = mpsc::channel();
+        accelerator.commands.send(HostCommand::Cycles { reply })
+            .expect("rushB BEMU Core worker stopped");
+        result.recv().expect("rushB BEMU Core worker stopped")
+    }).max().unwrap_or(0)
 }
 
 #[derive(Clone, Copy)]
@@ -431,6 +663,7 @@ pub extern "C" fn buckyball_reset(state: *mut c_void) {
 #[no_mangle]
 pub extern "C" fn buckyball_exec(state: *mut c_void, funct7: u8, xs1: u64, xs2: u64, pc: u64) -> u64 {
     let state = unsafe { state_mut(state) };
+    state.barrier_hit = false;
     let profile_started = state.profile.begin_npu();
     let lat = inst::decode::cycles_after_issue(funct7 as u32, xs1, xs2);
     state.total_lat += lat;
@@ -462,6 +695,7 @@ pub extern "C" fn buckyball_exec(state: *mut c_void, funct7: u8, xs1: u64, xs2: 
         bank_scoreboard,
         mmio_banks,
         mmio_region_table,
+        barrier_hit,
         uart: _,
         syscall: _,
         pk_vm: _,
@@ -478,6 +712,7 @@ pub extern "C" fn buckyball_exec(state: *mut c_void, funct7: u8, xs1: u64, xs2: 
                 bank_map,
                 mmio_banks,
                 mmio_region_table,
+                barrier_hit,
             };
 
             inst::decode::execute_known(funct7 as u32, xs1, xs2, &mut ctx)
@@ -512,6 +747,11 @@ pub extern "C" fn buckyball_exec(state: *mut c_void, funct7: u8, xs1: u64, xs2: 
     state.profile.end_npu(funct7, profile_started);
 
     result
+}
+
+#[no_mangle]
+pub extern "C" fn bemu_barrier_hit(state: *mut c_void) -> bool {
+    unsafe { (&*(state as *const EmuState)).barrier_hit }
 }
 
 /// Handle system call from guest program
@@ -620,6 +860,7 @@ extern "C" {
     fn spike_create_raw(
         isa: *const c_char,
         procs: usize,
+        hart_id: usize,
         mem_ptr: *mut u8,
         mem_size: usize,
         log_path: *const c_char,
@@ -642,6 +883,7 @@ extern "C" {
     fn spike_step_raw(ctx: *mut c_void) -> i32;
     fn spike_finished_raw(ctx: *mut c_void) -> bool;
     fn spike_exit_code_raw(ctx: *mut c_void) -> i32;
+    fn spike_stop_raw(ctx: *mut c_void, code: i32);
     fn spike_step_elapsed_ns_raw(ctx: *mut c_void) -> u64;
     fn spike_destroy_raw(ctx: *mut c_void);
 
@@ -678,12 +920,24 @@ impl NativeSpike {
         }
     }
 
+    pub fn barrier_hit(&self) -> bool {
+        bemu_barrier_hit(self.state_ptr())
+    }
+
+    fn state_ptr(&self) -> *mut c_void {
+        self.state.as_ref() as *const EmuState as *mut c_void
+    }
+
     pub fn finished(&self) -> bool {
         unsafe { spike_finished_raw(self.ctx) }
     }
 
     pub fn exit_code(&self) -> i32 {
         unsafe { spike_exit_code_raw(self.ctx) }
+    }
+
+    pub fn stop(&mut self, code: i32) {
+        unsafe { spike_stop_raw(self.ctx, code) }
     }
 
     pub fn total_latency(&self) -> u64 {
@@ -704,7 +958,8 @@ impl Drop for NativeSpike {
 
 pub fn create_spike(
     isa: &str,
-    procs: usize,
+    hart_id: usize,
+    shared_memory: Option<Arc<SharedMemory>>,
     log_path: Option<&str>,
     log_dir: &Path,
     trace_config: TraceConfig,
@@ -716,7 +971,7 @@ pub fn create_spike(
         .map_err(|e| format!("failed to create BEMU log dir {}: {e}", log_dir.display()))?;
     let isa_c = CString::new(isa).map_err(|e| e.to_string())?;
     let log_c = log_path.map(CString::new).transpose().map_err(|e| e.to_string())?;
-    let mut state = Box::new(EmuState::new(log_dir, trace_config, profile)?);
+    let mut state = Box::new(EmuState::new(log_dir, trace_config, profile, shared_memory)?);
     let mem_ptr = state.memory.as_mut_ptr();
     let mem_size = state.memory.len();
     let uart_ptr = &mut state.uart as *mut Uart as *mut u8;
@@ -725,7 +980,8 @@ pub fn create_spike(
     let ctx = unsafe {
         spike_create_raw(
             isa_c.as_ptr(),
-            procs,
+            1,
+            hart_id,
             mem_ptr,
             mem_size,
             log_c.as_ref().map_or(std::ptr::null(), |path| path.as_ptr()),

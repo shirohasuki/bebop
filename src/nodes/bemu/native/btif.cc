@@ -33,13 +33,13 @@ extern "C" {
     bool uart_mmio_store(uint8_t* uart_ptr, uint64_t addr, size_t size, uint64_t value);
 }
 
-BTIF::BTIF(uint8_t* mem_ptr, size_t mem_size, uint8_t* uart_ptr, const char* isa)
+BTIF::BTIF(uint8_t* mem_ptr, size_t mem_size, uint8_t* uart_ptr, const char* isa, size_t hart_id)
     : mem_ptr(mem_ptr), mem_size(mem_size), uart_ptr(uart_ptr) {
     isa_storage = isa;
     cfg.isa = isa_storage.c_str();
     cfg.priv = "MSU";
     cfg.mem_layout.push_back(mem_cfg_t(DRAM_BASE, mem_size));
-    cfg.hartids.push_back(0);
+    cfg.hartids.push_back(hart_id);
 }
 
 char* BTIF::addr_to_mem(reg_t addr) {
