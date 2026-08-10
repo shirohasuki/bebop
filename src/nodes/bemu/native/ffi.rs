@@ -220,12 +220,12 @@ fn host_mvout(state: &mut EmuState, xs1: u64, packed_xs2: u64, host_ptr: *mut u8
     }
 }
 
-#[no_mangle]
+#[cfg_attr(not(feature = "difftest"), no_mangle)]
 pub extern "C" fn rushb_init() {
     *HOST_STATE.lock().expect("rushB BEMU state poisoned") = Some(EmuState::new_host());
 }
 
-#[no_mangle]
+#[cfg_attr(not(feature = "difftest"), no_mangle)]
 pub extern "C" fn rushb_select_accelerator(accelerator_id: u32, chip_id: i32) {
     assert_eq!(
         RushBSelection::new(accelerator_id, chip_id),
@@ -234,19 +234,19 @@ pub extern "C" fn rushb_select_accelerator(accelerator_id: u32, chip_id: i32) {
     );
 }
 
-#[no_mangle]
+#[cfg_attr(not(feature = "difftest"), no_mangle)]
 pub extern "C" fn rushb_destroy() {
     *HOST_STATE.lock().expect("rushB BEMU state poisoned") = None;
 }
 
-#[no_mangle]
+#[cfg_attr(not(feature = "difftest"), no_mangle)]
 pub extern "C" fn rushb_mset(xs1: u64, xs2: u64) {
     with_host_state(|state| {
         host_execute(state, FUNCT7_MSET, xs1, xs2);
     });
 }
 
-#[no_mangle]
+#[cfg_attr(not(feature = "difftest"), no_mangle)]
 pub extern "C" fn rushb_mvin(xs1: u64, packed_xs2: u64, host_ptr: *const c_void) {
     with_host_state(|state| {
         state.total_lat += inst::decode::cycles_after_issue(FUNCT7_MVIN, xs1, packed_xs2);
@@ -254,7 +254,7 @@ pub extern "C" fn rushb_mvin(xs1: u64, packed_xs2: u64, host_ptr: *const c_void)
     });
 }
 
-#[no_mangle]
+#[cfg_attr(not(feature = "difftest"), no_mangle)]
 pub extern "C" fn rushb_mvout(xs1: u64, packed_xs2: u64, host_ptr: *mut c_void) {
     with_host_state(|state| {
         state.total_lat += inst::decode::cycles_after_issue(FUNCT7_MVOUT, xs1, packed_xs2);
@@ -262,14 +262,14 @@ pub extern "C" fn rushb_mvout(xs1: u64, packed_xs2: u64, host_ptr: *mut c_void) 
     });
 }
 
-#[no_mangle]
+#[cfg_attr(not(feature = "difftest"), no_mangle)]
 pub extern "C" fn rushb_custom(xs1: u64, xs2: u64, funct7: u32) {
     with_host_state(|state| {
         host_execute(state, funct7, xs1, xs2);
     });
 }
 
-#[no_mangle]
+#[cfg_attr(not(feature = "difftest"), no_mangle)]
 pub extern "C" fn rushb_cycles() -> u64 {
     with_host_state(|state| state.total_lat)
 }
