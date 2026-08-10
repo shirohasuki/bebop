@@ -426,7 +426,7 @@ fn host_mvout(state: &mut EmuState, xs1: u64, packed_xs2: u64, host_ptr: *mut u8
     }
 }
 
-#[no_mangle]
+#[cfg_attr(not(feature = "difftest"), no_mangle)]
 pub extern "C" fn rushb_init() {
     let mut guard = HOST_STATE.lock().expect("rushB BEMU state poisoned");
     assert!(guard.is_none(), "rushB BEMU is already initialized");
@@ -434,14 +434,14 @@ pub extern "C" fn rushb_init() {
     HOST_SELECTION.with(|selection| selection.set((0, 0)));
 }
 
-#[no_mangle]
+#[cfg_attr(not(feature = "difftest"), no_mangle)]
 pub extern "C" fn rushb_select_accelerator(accelerator_id: u32, chip_id: i32) {
     assert_eq!(chip_id, 0, "rushB BEMU supports tile chip_id 0 only");
     HOST_SELECTION.with(|selection| selection.set((accelerator_id, chip_id)));
     with_selected_accelerator(|_| {});
 }
 
-#[no_mangle]
+#[cfg_attr(not(feature = "difftest"), no_mangle)]
 pub extern "C" fn rushb_destroy() {
     let mut guard = HOST_STATE.lock().expect("rushB BEMU state poisoned");
     if let Some(state) = guard.take() {
@@ -452,7 +452,7 @@ pub extern "C" fn rushb_destroy() {
     }
 }
 
-#[no_mangle]
+#[cfg_attr(not(feature = "difftest"), no_mangle)]
 pub extern "C" fn rushb_mset(xs1: u64, xs2: u64) {
     with_selected_accelerator(|commands| {
         let (reply, result) = mpsc::channel();
@@ -462,7 +462,7 @@ pub extern "C" fn rushb_mset(xs1: u64, xs2: u64) {
     });
 }
 
-#[no_mangle]
+#[cfg_attr(not(feature = "difftest"), no_mangle)]
 pub extern "C" fn rushb_mvin(xs1: u64, packed_xs2: u64, host_ptr: *const c_void) {
     with_selected_accelerator(|commands| {
         let (reply, result) = mpsc::channel();
@@ -473,7 +473,7 @@ pub extern "C" fn rushb_mvin(xs1: u64, packed_xs2: u64, host_ptr: *const c_void)
     });
 }
 
-#[no_mangle]
+#[cfg_attr(not(feature = "difftest"), no_mangle)]
 pub extern "C" fn rushb_mvout(xs1: u64, packed_xs2: u64, host_ptr: *mut c_void) {
     with_selected_accelerator(|commands| {
         let (reply, result) = mpsc::channel();
@@ -484,7 +484,7 @@ pub extern "C" fn rushb_mvout(xs1: u64, packed_xs2: u64, host_ptr: *mut c_void) 
     });
 }
 
-#[no_mangle]
+#[cfg_attr(not(feature = "difftest"), no_mangle)]
 pub extern "C" fn rushb_custom(xs1: u64, xs2: u64, funct7: u32) {
     with_selected_accelerator(|commands| {
         let (reply, result) = mpsc::channel();
@@ -494,7 +494,7 @@ pub extern "C" fn rushb_custom(xs1: u64, xs2: u64, funct7: u32) {
     });
 }
 
-#[no_mangle]
+#[cfg_attr(not(feature = "difftest"), no_mangle)]
 pub extern "C" fn rushb_cycles() -> u64 {
     let guard = HOST_STATE.lock().expect("rushB BEMU state poisoned");
     let state = guard.as_ref().expect("rushB is not initialized; call rushb_init first");

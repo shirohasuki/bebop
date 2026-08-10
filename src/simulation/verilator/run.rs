@@ -262,8 +262,8 @@ impl DiffSession {
             let golden_log_dir = log_dir.join("golden");
             let mut trace = BemuTraceConfig::new(false, false);
             trace.btrace = true;
-            let mut golden =
-                BemuInstance::new(&golden_log_dir, trace).whatever_context("failed to create BEMU Golden Model")?;
+            let mut golden = BemuInstance::new(&golden_log_dir, trace, false, false)
+                .whatever_context("failed to create BEMU Golden Model")?;
             golden.load_elf(elf)?;
             golden.init_hart(false)?;
             Ok::<_, Whatever>(golden)
