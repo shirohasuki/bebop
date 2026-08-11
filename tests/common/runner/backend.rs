@@ -6,8 +6,7 @@ use super::super::artifacts::ArtifactManager;
 use super::super::discovery::ElfTestCase;
 
 fn path_stem(path: &Path) -> Option<String> {
-    path.file_name()
-        .map(|n| n.to_string_lossy().into_owned())
+    path.file_name().map(|n| n.to_string_lossy().into_owned())
 }
 
 fn is_rushb_bemu(path: &Path) -> bool {
@@ -79,10 +78,7 @@ impl BackendRunner for BemuBackend {
             return;
         }
         if is_rushb_verilator(elf_path) {
-            panic!(
-                "bemu harness got verilator rushB runner: {}",
-                elf_path.display()
-            );
+            panic!("bemu harness got verilator rushB runner: {}", elf_path.display());
         }
 
         cmd.arg("run");
@@ -115,12 +111,25 @@ impl BackendRunner for BemuBackend {
 #[cfg(feature = "verilator")]
 #[derive(Clone, Copy, Debug, Default)]
 #[allow(dead_code)]
-pub struct VerilatorBackend;
+pub struct VerilatorBackend {
+    diff: bool,
+}
+
+#[cfg(feature = "verilator")]
+impl VerilatorBackend {
+    pub fn new(diff: bool) -> Self {
+        Self { diff }
+    }
+}
 
 #[cfg(feature = "verilator")]
 impl BackendRunner for VerilatorBackend {
     fn backend_name(&self) -> &'static str {
-        "verilator"
+        if self.diff {
+            "difftest"
+        } else {
+            "verilator"
+        }
     }
 
     fn verbose_run_kind(&self) -> &'static str {
@@ -132,10 +141,7 @@ impl BackendRunner for VerilatorBackend {
             return;
         }
         if is_rushb_bemu(elf_path) {
-            panic!(
-                "verilator harness got bemu rushB runner: {}",
-                elf_path.display()
-            );
+            panic!("verilator harness got bemu rushB runner: {}", elf_path.display());
         }
 
         cmd.arg("run");
@@ -143,6 +149,9 @@ impl BackendRunner for VerilatorBackend {
         cmd.arg("--elf").arg(elf_path);
         cmd.arg("--log-dir").arg(artifacts.log_dir());
         cmd.arg("--no-wave");
+        if self.diff {
+            cmd.arg("--diff");
+        }
     }
 
     fn timeout(&self) -> Duration {
@@ -160,7 +169,28 @@ impl BackendRunner for VerilatorBackend {
         if is_rushb_verilator(elf_path) {
             return;
         }
-        cmd.env("ARCH_CONFIG", "sims.verilator.BuckyballToyVerilatorConfig");
+        let arch_config = std::env::var_os("BEBOP_ARCH_CONFIG")
+            .unwrap_or_else(|| "sims.verilator.BuckyballToyVerilatorConfig".into());
+        cmd.env("ARCH_CONFIG", arch_config);
+        if self.diff {
+            if let Some(preload) = std::env::var_os("BEBOP_DIFF_LD_PRELOAD") {
+                cmd.env("LD_PRELOAD", preload);
+            }
+        }
+    }
+
+    fn configure_command_dir(&self, cmd: &mut Command, elf_path: &Path) {
+        if is_rushb_verilator(elf_path) {
+            if let Some(dir) = elf_path.parent() {
+                cmd.current_dir(dir);
+            }
+            return;
+        }
+        if self.diff {
+            if let Some(dir) = std::env::var_os("BEBOP_DIFF_RUN_DIR") {
+                cmd.current_dir(dir);
+            }
+        }
     }
 
     fn needs_log_dir(&self) -> bool {
