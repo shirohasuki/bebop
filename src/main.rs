@@ -89,6 +89,8 @@ pub enum RunTarget {
         no_wave: bool,
         #[arg(long, help = "Run with a BEMU difftest instance")]
         diff: bool,
+        #[arg(long, help = "Run the RTL simulator in non-interactive batch mode")]
+        batch: bool,
         #[arg(long, help = "Run with a BEMU fast/difftest instance")]
         fast: bool,
         #[arg(long, help = "Enable RTL instruction trace")]

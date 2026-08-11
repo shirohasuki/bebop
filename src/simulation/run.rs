@@ -38,6 +38,7 @@ pub fn run(command: RunCommand) -> Result<(), Whatever> {
             log_dir,
             no_wave,
             diff,
+            batch,
             fast,
             itrace,
             mtrace,
@@ -52,6 +53,7 @@ pub fn run(command: RunCommand) -> Result<(), Whatever> {
                     log_dir,
                     wave: !no_wave,
                     diff,
+                    batch,
                     fast,
                     trace: crate::simulation::verilator::run::VerilatorTraceConfig {
                         itrace,
@@ -65,7 +67,7 @@ pub fn run(command: RunCommand) -> Result<(), Whatever> {
             #[cfg(not(feature = "verilator"))]
             {
                 let _ = (
-                    elf, log_dir, no_wave, diff, fast, itrace, mtrace, pmctrace, ctrace, banktrace,
+                    elf, log_dir, no_wave, diff, batch, fast, itrace, mtrace, pmctrace, ctrace, banktrace,
                 );
                 crate::simulation::verilator::run::run_unavailable()
             }
