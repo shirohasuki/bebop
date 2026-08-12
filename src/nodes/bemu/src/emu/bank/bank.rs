@@ -68,6 +68,9 @@ impl BankMap {
 pub struct BankConfig {
     pub allocated: bool,
     pub cols: u64,
+    /// Rows populated by the most recent MVIN. Gemmini uses this to apply the
+    /// CISC zero-op1-tail contract without guessing from bank contents.
+    pub valid_rows: u64,
 }
 
 /// DRAM is mapped at this base address from the guest's perspective.

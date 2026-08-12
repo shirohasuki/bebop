@@ -32,6 +32,7 @@ struct EmuState {
     bank_cfgs: Vec<BankConfig>,
     bank_map: BankMap,
     bank_scoreboard: inst::instruction::BankScoreboard,
+    deferred_bank_frees: Vec<u32>,
     mmio_banks: Vec<Vec<u8>>,
     mmio_region_table: Vec<crate::inst::instruction::MmioRegion>,
     total_lat: u64,
@@ -55,6 +56,7 @@ impl EmuState {
             bank_cfgs: vec![BankConfig::default(); bank_num()],
             bank_map: BankMap::new(bank_num()),
             bank_scoreboard: inst::instruction::BankScoreboard::new(),
+            deferred_bank_frees: Vec::new(),
             mmio_banks: vec![vec![0; mmio_bank_size()]; mmio_bank_num()],
             mmio_region_table: vec![crate::inst::instruction::MmioRegion::default(); bank_num()],
             total_lat: 0,
@@ -74,6 +76,7 @@ impl EmuState {
         self.bank_cfgs.fill(BankConfig::default());
         self.bank_map = BankMap::new(bank_num());
         self.bank_scoreboard.reset();
+        self.deferred_bank_frees.clear();
         for bank in &mut self.mmio_banks {
             bank.fill(0);
         }
@@ -93,6 +96,7 @@ impl EmuState {
             bank_cfgs: vec![BankConfig::default(); bank_num()],
             bank_map: BankMap::new(bank_num()),
             bank_scoreboard: inst::instruction::BankScoreboard::new(),
+            deferred_bank_frees: Vec::new(),
             mmio_banks: vec![vec![0; mmio_bank_size()]; mmio_bank_num()],
             mmio_region_table: vec![crate::inst::instruction::MmioRegion::default(); bank_num()],
             total_lat: 0,
@@ -124,6 +128,7 @@ fn host_execute(state: &mut EmuState, funct7: u32, xs1: u64, xs2: u64) -> u64 {
         banks: inst::instruction::TrackedBanks::new(&mut state.banks, Some(&state.bank_scoreboard), instruction_id),
         cfgs: &mut state.bank_cfgs,
         bank_map: &mut state.bank_map,
+        deferred_bank_frees: &mut state.deferred_bank_frees,
         mmio_banks: &mut state.mmio_banks,
         mmio_region_table: &mut state.mmio_region_table,
     };
@@ -131,7 +136,25 @@ fn host_execute(state: &mut EmuState, funct7: u32, xs1: u64, xs2: u64) -> u64 {
         inst::decode::execute_known(funct7, xs1, xs2, &mut ctx).unwrap_or_else(|| panic!("unknown funct7: {funct7}"));
     drop(ctx);
     state.bank_scoreboard.complete(instruction_id);
+    finish_deferred_bank_frees(
+        &mut state.bank_cfgs,
+        &mut state.bank_map,
+        &mut state.deferred_bank_frees,
+    );
     result
+}
+
+fn finish_deferred_bank_frees(
+    bank_cfgs: &mut [BankConfig],
+    bank_map: &mut BankMap,
+    deferred_bank_frees: &mut Vec<u32>,
+) {
+    for bank_id in deferred_bank_frees.drain(..) {
+        let index = bank_id as usize;
+        assert!(index < bank_cfgs.len(), "deferred free: invalid bank_id {bank_id}");
+        bank_map.delete_vbank(bank_id);
+        bank_cfgs[index] = BankConfig::default();
+    }
 }
 
 fn host_mvin(state: &mut EmuState, xs1: u64, packed_xs2: u64, host_ptr: *const u8) {
@@ -175,6 +198,7 @@ fn host_mvin(state: &mut EmuState, xs1: u64, packed_xs2: u64, host_ptr: *const u
             }
         }
     }
+    state.bank_cfgs[bi].valid_rows = depth;
 }
 
 fn host_mvout(state: &mut EmuState, xs1: u64, packed_xs2: u64, host_ptr: *mut u8) {
@@ -460,6 +484,7 @@ pub extern "C" fn buckyball_exec(state: *mut c_void, funct7: u8, xs1: u64, xs2: 
         bank_cfgs,
         bank_map,
         bank_scoreboard,
+        deferred_bank_frees,
         mmio_banks,
         mmio_region_table,
         uart: _,
@@ -476,6 +501,7 @@ pub extern "C" fn buckyball_exec(state: *mut c_void, funct7: u8, xs1: u64, xs2: 
                 banks: inst::instruction::TrackedBanks::new(banks, btrace.then_some(&*bank_scoreboard), instruction_id),
                 cfgs: bank_cfgs,
                 bank_map,
+                deferred_bank_frees,
                 mmio_banks,
                 mmio_region_table,
             };
@@ -509,6 +535,7 @@ pub extern "C" fn buckyball_exec(state: *mut c_void, funct7: u8, xs1: u64, xs2: 
             })
         };
     }
+    finish_deferred_bank_frees(bank_cfgs, bank_map, deferred_bank_frees);
     state.profile.end_npu(funct7, profile_started);
 
     result

@@ -84,6 +84,7 @@ impl Instruction for Mvin {
                 });
             }
         }
+        ctx.cfgs[bi].valid_rows = depth;
         0
     }
 
