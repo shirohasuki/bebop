@@ -34,12 +34,14 @@ impl Instruction for Mset {
             ctx.cfgs[i] = BankConfig {
                 allocated: true,
                 cols: col,
+                valid_rows: 0,
             };
         } else {
             ctx.bank_map.delete_vbank(v);
             ctx.cfgs[i] = BankConfig {
                 allocated: false,
                 cols: 0,
+                valid_rows: 0,
             };
         }
         0

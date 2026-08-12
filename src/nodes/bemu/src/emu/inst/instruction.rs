@@ -148,9 +148,30 @@ pub struct ExecContext<'a> {
     pub banks: TrackedBanks<'a>,
     pub cfgs: &'a mut [BankConfig],
     pub bank_map: &'a mut BankMap,
+    /// Virtual banks released by a CISC instruction after its bank digest is
+    /// sampled. Keeping the mapping alive until then preserves the logical
+    /// identity of every physical bank written by the instruction.
+    pub deferred_bank_frees: &'a mut Vec<u32>,
     pub mmio_banks: &'a mut [Vec<u8>],
     pub mmio_region_table: &'a mut [MmioRegion],
     pub barrier_hit: &'a mut bool,
+}
+
+impl ExecContext<'_> {
+    pub fn defer_bank_free(&mut self, bank_id: u64) {
+        let bank_id = u32::try_from(bank_id).expect("deferred bank id exceeds u32");
+        let index = bank_id as usize;
+        assert!(index < self.cfgs.len(), "deferred free: invalid bank_id {bank_id}");
+        assert!(
+            self.cfgs[index].allocated,
+            "deferred free: bank {bank_id} is not allocated"
+        );
+        assert!(
+            !self.deferred_bank_frees.contains(&bank_id),
+            "deferred free: duplicate bank {bank_id}"
+        );
+        self.deferred_bank_frees.push(bank_id);
+    }
 }
 
 #[cfg(test)]
