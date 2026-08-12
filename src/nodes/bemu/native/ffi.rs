@@ -322,7 +322,9 @@ fn with_selected_accelerator<R>(f: impl FnOnce(&mpsc::Sender<HostCommand>) -> R)
 fn host_execute(state: &mut EmuState, funct7: u32, xs1: u64, xs2: u64) -> u64 {
     state.barrier_hit = false;
     state.total_lat += inst::decode::cycles_after_issue(funct7, xs1, xs2);
-    state.npu_instruction_id = state.npu_instruction_id.wrapping_add(1);
+    if funct7 != 0 && funct7 != 1 {
+        state.npu_instruction_id = state.npu_instruction_id.wrapping_add(1);
+    }
     if matches!(funct7, 65 | 66) {
         state.matrix_instruction_count = state.matrix_instruction_count.wrapping_add(1);
     }
@@ -692,7 +694,9 @@ pub extern "C" fn buckyball_exec(state: *mut c_void, funct7: u8, xs1: u64, xs2: 
     let lat = inst::decode::cycles_after_issue(funct7 as u32, xs1, xs2);
     state.total_lat += lat;
     state.trace.set_bemu_clk(state.total_lat);
-    state.npu_instruction_id = state.npu_instruction_id.wrapping_add(1);
+    if funct7 != 0 && funct7 != 1 {
+        state.npu_instruction_id = state.npu_instruction_id.wrapping_add(1);
+    }
     let instruction_id = state.npu_instruction_id;
     let trace = &mut state.trace as *mut TraceState;
     let btrace = state.trace.btrace_enabled();
