@@ -8,7 +8,6 @@ mod tile_config;
 mod toml_utils;
 
 pub use core_config::{parse_core_config, CoreTopology};
-#[allow(unused_imports)]
 pub use tile_config::parse_tile_config;
 
 use std::fs;
@@ -27,7 +26,30 @@ pub fn top_config_from_manifest(manifest_dir: &Path) -> PathBuf {
     toml_utils::resolve(lib.parent().expect("lib.rs has parent"), rel)
 }
 
-/// Build-time BEMU validation always targets its owning Core package.
-pub fn parse_topology(core_config: &Path) -> CoreTopology {
-    parse_core_config(core_config)
+/// Follow the Chip -> Tile -> Core include chain and return the first Core
+/// which owns a BallDomain. A BEMU crate is built for one chip, while workers
+/// are bound to concrete Core TOMLs later at runtime.
+pub fn parse_topology(chip_config: &Path) -> CoreTopology {
+    let mut files_read = Vec::new();
+    let chip = toml_utils::read(chip_config, &mut files_read);
+    let parent = chip_config.parent().expect("Chip TOML has parent directory");
+
+    let tile_entry = chip
+        .get("tiles")
+        .and_then(toml::Value::as_array)
+        .and_then(|tiles| tiles.first())
+        .or_else(|| chip.get("tileTemplate"))
+        .unwrap_or_else(|| panic!("{} must define [[tiles]] or [tileTemplate]", chip_config.display()));
+    let tile_path = toml_utils::resolve(parent, &toml_utils::string(tile_entry, "include", chip_config));
+    let tile = parse_tile_config(&tile_path);
+    files_read.extend(tile.files_read.iter().cloned());
+
+    let mut core = tile
+        .cores
+        .into_iter()
+        .map(|(_, _, core)| core)
+        .find(|core| !core.ball_domain.mappings.is_empty())
+        .unwrap_or_else(|| panic!("{} contains no Core with a BallDomain", tile_path.display()));
+    core.files_read = files_read;
+    core
 }
