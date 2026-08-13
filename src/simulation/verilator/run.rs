@@ -65,7 +65,6 @@ pub struct VerilatorRunConfig {
     pub log_dir: PathBuf,
     pub wave: bool,
     pub diff: bool,
-    pub batch: bool,
     pub fast: bool,
     pub trace: VerilatorTraceConfig,
 }
@@ -158,10 +157,7 @@ pub fn run(config: VerilatorRunConfig) -> Result<(), Whatever> {
     println!("Console socket: {}", console.socket_path().display());
     println!("UART logs: {}", console.uart_log_dir().display());
 
-    let mut simulator_args = vec![format!("+elf={}", config.elf.display())];
-    if config.batch {
-        simulator_args.push("+batch".to_string());
-    }
+    let simulator_args = vec![format!("+elf={}", config.elf.display())];
     let mut simulator = Simulator::new(config.wave.then_some(fst_file.as_path()), &simulator_args)
         .map_err(|e| Whatever::without_source(format!("failed to create Verilator simulator: {e}")))?;
 
