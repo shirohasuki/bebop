@@ -20,6 +20,13 @@ pub fn configure(path: &Path) {
     VIRTUAL_BANK_COUNT.with(|slot| *slot.borrow_mut() = None);
 }
 
+/// Bind the current host thread from a top-level Chip TOML, following its
+/// Tile and Core includes to the Core which owns the BallDomain.
+pub fn configure_topology(path: &Path) {
+    TOPOLOGY.with(|slot| *slot.borrow_mut() = Some(config_loader::parse_topology(path)));
+    VIRTUAL_BANK_COUNT.with(|slot| *slot.borrow_mut() = None);
+}
+
 pub fn configure_with_virtual_bank_count(path: &Path, virtual_bank_count: usize) {
     configure(path);
     VIRTUAL_BANK_COUNT.with(|slot| *slot.borrow_mut() = Some(virtual_bank_count));
@@ -37,7 +44,7 @@ fn top_config_path() -> PathBuf {
 fn with_topology<R>(f: impl FnOnce(&Topology) -> R) -> R {
     TOPOLOGY.with(|slot| {
         if slot.borrow().is_none() {
-            *slot.borrow_mut() = Some(config_loader::parse_core_config(&top_config_path()));
+            *slot.borrow_mut() = Some(config_loader::parse_topology(&top_config_path()));
         }
         f(slot.borrow().as_ref().expect("BEMU Core topology is not configured"))
     })

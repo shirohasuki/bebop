@@ -33,7 +33,17 @@ pub struct BemuInstance {
 
 impl BemuInstance {
     pub fn new(log_dir: &Path, trace_config: TraceConfig, disasm: bool, profile: bool) -> Result<Self, Whatever> {
-        Self::new_with_core(log_dir, trace_config, disasm, profile, Path::new(crate::BEMU_TOP_CONFIG))
+        let top_config = Path::new(crate::BEMU_TOP_CONFIG);
+        let top_config = if top_config.is_absolute() {
+            top_config.to_path_buf()
+        } else {
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("src").join(top_config)
+        };
+        crate::config::configure_topology(&top_config);
+        Ok(Self {
+            spike: SpikeInstance::new(log_dir, trace_config, disasm, profile, 0, None)
+                .whatever_context("failed to create spike instance")?,
+        })
     }
 
     /// Create a worker bound to one concrete Core TOML. The caller must invoke
