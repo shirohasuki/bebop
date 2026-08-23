@@ -77,6 +77,8 @@ pub fn run(command: RunCommand) -> Result<(), Whatever> {
             bank_digest,
             disasm,
             tool_profile,
+            itrace,
+            mtrace,
         } => crate::simulation::bemu::run::run(crate::simulation::bemu::run::BemuRunConfig {
             elf,
             log_dir,
@@ -84,6 +86,8 @@ pub fn run(command: RunCommand) -> Result<(), Whatever> {
             bank_digest,
             disasm,
             tool_profile,
+            itrace,
+            mtrace,
         }),
         RunTarget::P2e {
             image,

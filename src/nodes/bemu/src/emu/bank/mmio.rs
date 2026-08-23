@@ -5,59 +5,40 @@
 //
 //===-----------------------------------------------------------------===//
 
-use super::super::inst::instruction::MmioRegion;
-use super::{mmio_bank_size, mmio_enable, mmio_total_size};
+use super::{mmio_bank_num, mmio_enable, mmio_total_size};
 
 /// Read a byte from MMIO banks.
 ///
 /// # Arguments
 /// * `mmio_banks` - MMIO banks sized from the active chip memdomain TOML
-/// * `mmio_region_table` - Region table mapping main banks to MMIO regions
-/// * `meta_bank` - Main bank ID whose MMIO region to use
-/// * `rel_addr` - Relative byte address within the MMIO region
+/// * `addr` - Absolute byte address in the unified MMIO space
 ///
 /// # Returns
-/// The byte value at the specified MMIO address, or 0 if invalid.
+/// The byte value at the specified MMIO address.
 #[allow(dead_code)]
-pub fn mmio_read_byte(
-    mmio_banks: &[Vec<u8>],
-    mmio_region_table: &[MmioRegion],
-    meta_bank: usize,
-    rel_addr: usize,
-) -> u8 {
+pub fn mmio_read_byte(mmio_banks: &[Vec<u8>], addr: usize) -> u8 {
     if !mmio_enable() {
         panic!("mmio_read_byte: MMIO is disabled for this BEMU chip config");
     }
 
-    if meta_bank >= mmio_region_table.len() {
-        eprintln!("[WARN] mmio_read_byte: invalid meta_bank {}", meta_bank);
-        return 0;
+    if addr >= mmio_total_size() {
+        panic!("mmio_read_byte: address 0x{:x} out of range", addr);
     }
 
-    let region = &mmio_region_table[meta_bank];
-    if !region.valid {
-        eprintln!("[WARN] mmio_read_byte: no MMIO region bound to bank {}", meta_bank);
-        return 0;
-    }
-
-    let size_bytes = region.size_rows as usize * mmio_bank_size();
-    if rel_addr >= size_bytes {
-        eprintln!(
-            "[WARN] mmio_read_byte: relative address 0x{:x} out of region size 0x{:x}",
-            rel_addr, size_bytes
-        );
-        return 0;
-    }
-
-    let abs_addr = region.mmio_addr as usize + rel_addr;
-
-    if abs_addr >= mmio_total_size() {
-        eprintln!("[WARN] mmio_read_byte: address 0x{:x} out of range", abs_addr);
-        return 0;
-    }
-
-    let bank_idx = abs_addr / mmio_bank_size();
-    let bank_offset = abs_addr % mmio_bank_size();
+    let bank_idx = addr % mmio_bank_num();
+    let bank_offset = addr / mmio_bank_num();
 
     mmio_banks[bank_idx][bank_offset]
+}
+
+pub fn mmio_write_byte(mmio_banks: &mut [Vec<u8>], addr: usize, data: u8) {
+    if !mmio_enable() {
+        panic!("mmio_write_byte: MMIO is disabled for this BEMU chip config");
+    }
+    if addr >= mmio_total_size() {
+        panic!("mmio_write_byte: address 0x{:x} out of range", addr);
+    }
+    let bank_idx = addr % mmio_bank_num();
+    let bank_offset = addr / mmio_bank_num();
+    mmio_banks[bank_idx][bank_offset] = data;
 }

@@ -19,8 +19,8 @@ pub fn discover_tests(
     match_case: impl Fn(&ElfTestCase) -> bool,
 ) -> Result<Vec<ElfTestCase>, DiscoveryError> {
     // Priority: workload_toml > case_list > scan all
-    let test_cases = if let Some(toml_path) = args.workload_toml() {
-        discover_from_workload_toml(args, extension, &toml_path)?
+    let test_cases = if let Some(toml_path) = &args.workload_toml {
+        discover_from_workload_toml(args, extension, toml_path)?
     } else if args.case_list.is_some() {
         let bb_tests_root = args.bb_tests_root();
         if !bb_tests_root.exists() {

@@ -74,6 +74,7 @@ in {
   ninja = pkgs.ninja;
   dtc = pkgs.dtc;
   gcc = pkgs.gcc;
+  clang = pkgs.clang;
   boost = pkgs.boost.dev;
   python3 = pkgs.python3;
   # clangTools = pkgs.clang-tools;

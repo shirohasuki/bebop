@@ -61,7 +61,14 @@ impl RunWorkloadStep {
         // Run vdbg with sourced environment
         // CRITICAL: Use LD_PRELOAD to load Rust DPI-C functions (scu_uart_write, scu_sim_exit)
         // Find libbebop_p2e.so in target/release/deps or vvacDir/runtimeDir/lib/lib_arm
-        let bebop_lib = if let Ok(manifest_dir) = std::env::var("CARGO_MANIFEST_DIR") {
+        let bebop_lib = if let Ok(target_dir) = std::env::var("CARGO_TARGET_DIR") {
+            let release_lib = format!("{}/release/deps/libbebop_p2e.so", target_dir);
+            if std::path::Path::new(&release_lib).exists() {
+                release_lib
+            } else {
+                format!("{}/out/vvacDir/runtimeDir/lib/lib_arm/libbebop_p2e.so", target_dir)
+            }
+        } else if let Ok(manifest_dir) = std::env::var("CARGO_MANIFEST_DIR") {
             let release_lib = format!("{}/target/release/deps/libbebop_p2e.so", manifest_dir);
             if std::path::Path::new(&release_lib).exists() {
                 release_lib
@@ -69,7 +76,6 @@ impl RunWorkloadStep {
                 format!("{}/out/vvacDir/runtimeDir/lib/lib_arm/libbebop_p2e.so", manifest_dir)
             }
         } else {
-            // Fallback: assume we're in bebop/out directory
             "./vvacDir/runtimeDir/lib/lib_arm/libbebop_p2e.so".to_string()
         };
 

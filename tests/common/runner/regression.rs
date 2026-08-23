@@ -8,6 +8,16 @@ use super::super::discovery::{discover_tests, write_nextest_terse_list, ElfTestC
 use super::backend::BackendRunner;
 use super::exec::{print_failure_details, run_backend_elf_test};
 
+fn resolve_runner_bin() -> PathBuf {
+    if let Some(path) = option_env!("CARGO_BIN_EXE_bebop") {
+        return PathBuf::from(path);
+    }
+    if let Some(path) = option_env!("CARGO_BIN_EXE_bebop_bemu") {
+        return PathBuf::from(path);
+    }
+    panic!("missing CARGO_BIN_EXE_bebop or CARGO_BIN_EXE_bebop_bemu for regression harness");
+}
+
 pub fn run_elf_regression<B, F>(
     args: RegressionArgs,
     harness_binary_name: &'static str,
@@ -39,7 +49,7 @@ where
         return ExitCode::SUCCESS;
     }
 
-    let bebop_bin = PathBuf::from(env!("CARGO_BIN_EXE_bebop"));
+    let bebop_bin = resolve_runner_bin();
 
     if !bebop_bin.exists() {
         eprintln!("Error: bebop binary not found at: {}", bebop_bin.display());

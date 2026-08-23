@@ -12,7 +12,7 @@
 //
 //===-----------------------------------------------------------------===//-----===//
 
-use super::super::bank::{mem_read, mmio_bank_row_bytes, mmio_bank_size, mmio_enable, mmio_total_size};
+use super::super::bank::{bank_row_bytes, mem_read, mmio_bank_num, mmio_enable, mmio_total_size};
 use super::instruction::{ExecContext, Instruction};
 
 pub struct MvinMmio;
@@ -30,7 +30,7 @@ impl Instruction for MvinMmio {
         let col = ((xs2 >> 56) & 0xFF) as u8; // bits [63:56]
         let row = ((xs1 >> 30) & 0x3_FFFF_FFFF) as u32; // bits [63:30], 34-bit
 
-        let bytes_per_row = mmio_bank_row_bytes();
+        let bytes_per_row = bank_row_bytes();
         for r in 0..row as usize {
             let src_addr = dram_addr + (r * bytes_per_row) as u64;
             let dst_offset = mmio_addr as usize + r * bytes_per_row;
@@ -39,15 +39,15 @@ impl Instruction for MvinMmio {
                 panic!("mvin_mmio: MMIO address out of range");
             }
 
-            let bank_idx = dst_offset / mmio_bank_size();
-            let bank_offset = dst_offset % mmio_bank_size();
-
-            for b in 0..(col as usize).min(bytes_per_row) {
-                ctx.mmio_banks[bank_idx][bank_offset + b] = mem_read(ctx.memory, src_addr + b as u64);
-            }
-            // Zero-pad remaining bytes
-            for b in (col as usize)..bytes_per_row {
-                ctx.mmio_banks[bank_idx][bank_offset + b] = 0;
+            for b in 0..bytes_per_row {
+                let abs_addr = dst_offset + b;
+                let bank_idx = abs_addr % mmio_bank_num();
+                let bank_offset = abs_addr / mmio_bank_num();
+                ctx.mmio_banks[bank_idx][bank_offset] = if b < col as usize {
+                    mem_read(ctx.memory, src_addr + b as u64)
+                } else {
+                    0
+                };
             }
         }
         0

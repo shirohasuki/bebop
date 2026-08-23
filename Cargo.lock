@@ -97,7 +97,6 @@ version = "0.1.0"
 dependencies = [
  "assert_cmd",
  "bebop-bank-hash",
- "bebop-bemu",
  "bebop-bemu-profile",
  "bebop-dasm",
  "bebop-fd-redirect",
@@ -134,36 +133,11 @@ dependencies = [
 ]
 
 [[package]]
-name = "bebop-bemu"
-version = "0.1.0"
-dependencies = [
- "bebop-bank-hash",
- "bebop-bemu-profile",
- "bebop-dtb",
- "bebop-elf",
- "bebop-rushb",
- "bebop-syscall",
- "bebop-uart",
- "cc",
- "once_cell",
- "snafu",
- "toml",
-]
-
-[[package]]
 name = "bebop-bemu-profile"
 version = "0.1.0"
 
 [[package]]
 name = "bebop-dasm"
-version = "0.1.0"
-
-[[package]]
-name = "bebop-dtb"
-version = "0.1.0"
-
-[[package]]
-name = "bebop-elf"
 version = "0.1.0"
 
 [[package]]
@@ -193,13 +167,6 @@ dependencies = [
 [[package]]
 name = "bebop-rushb"
 version = "0.1.0"
-
-[[package]]
-name = "bebop-syscall"
-version = "0.1.0"
-dependencies = [
- "once_cell",
-]
 
 [[package]]
 name = "bebop-uart"

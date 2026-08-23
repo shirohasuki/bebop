@@ -34,6 +34,8 @@ pub struct BemuRunConfig {
     pub bank_digest: bool,
     pub disasm: bool,
     pub tool_profile: bool,
+    pub itrace: bool,
+    pub mtrace: bool,
 }
 
 pub fn run(config: BemuRunConfig) -> Result<(), Whatever> {
@@ -44,7 +46,7 @@ pub fn run(config: BemuRunConfig) -> Result<(), Whatever> {
         println!("[INFO] Running BEMU: elf={elf} log_dir={log_dir}");
 
         // Step 1: Initialize BEMU
-        let mut trace_config = TraceConfig::new(false, false);
+        let mut trace_config = TraceConfig::new(config.itrace, config.mtrace);
         trace_config.btrace = config.bank_digest;
 
         let mut bemu = BemuInstance::new(&config.log_dir, trace_config, config.disasm, config.tool_profile)?;

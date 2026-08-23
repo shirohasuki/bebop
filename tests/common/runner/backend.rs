@@ -73,7 +73,7 @@ impl BackendRunner for BemuBackend {
         "bemu"
     }
 
-    fn build_command(&self, cmd: &mut Command, _bebop_bin: &Path, elf_path: &Path, artifacts: &ArtifactManager) {
+    fn build_command(&self, cmd: &mut Command, bebop_bin: &Path, elf_path: &Path, artifacts: &ArtifactManager) {
         if is_rushb_bemu(elf_path) {
             return;
         }
@@ -81,10 +81,18 @@ impl BackendRunner for BemuBackend {
             panic!("bemu harness got verilator rushB runner: {}", elf_path.display());
         }
 
-        cmd.arg("run");
-        cmd.arg("bemu");
-        cmd.arg("--elf").arg(elf_path);
-        cmd.arg("--log-dir").arg(artifacts.log_dir());
+        let direct = bebop_bin
+            .file_stem()
+            .is_some_and(|stem| stem == "bebop-bemu" || stem == "bebop_bemu");
+        if direct {
+            cmd.arg("--elf").arg(elf_path);
+            cmd.arg("--log-dir").arg(artifacts.log_dir());
+        } else {
+            cmd.arg("run");
+            cmd.arg("bemu");
+            cmd.arg("--elf").arg(elf_path);
+            cmd.arg("--log-dir").arg(artifacts.log_dir());
+        }
 
         if let Some(stem) = elf_path.file_stem() {
             if stem.to_string_lossy().ends_with("-linux") {

@@ -133,15 +133,6 @@ impl IndexMut<usize> for TrackedBanks<'_> {
     }
 }
 
-/// MMIO region descriptor
-#[allow(dead_code)]
-#[derive(Clone, Copy, Default)]
-pub struct MmioRegion {
-    pub valid: bool,
-    pub mmio_addr: u16,
-    pub size_rows: u8,
-}
-
 /// Execution context passed to all instructions
 pub struct ExecContext<'a> {
     pub memory: &'a mut [u8],
@@ -153,7 +144,6 @@ pub struct ExecContext<'a> {
     /// identity of every physical bank written by the instruction.
     pub deferred_bank_frees: &'a mut Vec<u32>,
     pub mmio_banks: &'a mut [Vec<u8>],
-    pub mmio_region_table: &'a mut [MmioRegion],
     pub barrier_hit: &'a mut bool,
 }
 
@@ -212,5 +202,12 @@ pub trait Instruction {
     fn exec(xs1: u64, xs2: u64, ctx: &mut ExecContext) -> u64;
 
     /// Calculate latency (cycles from issue to complete)
+    fn latency(xs1: u64, xs2: u64) -> u64;
+}
+
+/// Ball semantics are selected by the Core's ballISA mnemonic mapping.
+/// Ball implementations must not own a numeric funct7 encoding.
+pub trait BallInstruction {
+    fn exec(xs1: u64, xs2: u64, ctx: &mut ExecContext) -> u64;
     fn latency(xs1: u64, xs2: u64) -> u64;
 }

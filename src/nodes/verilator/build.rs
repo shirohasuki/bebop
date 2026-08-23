@@ -93,6 +93,7 @@ fn main() {
     let generated_cpps = collect_verilator_cpps(&obj_dir);
 
     let mut build = cc::Build::new();
+    build.compiler(require_gxx());
     build.cpp(true);
     build.std("c++17");
     build.warnings(false);
@@ -148,6 +149,20 @@ fn main() {
 struct NixRiscv {
     include_dir: PathBuf,
     lib_dir: PathBuf,
+}
+
+fn require_gxx() -> String {
+    let cxx = "g++";
+    let status = Command::new(cxx)
+        .arg("--version")
+        .stdout(Stdio::null())
+        .status()
+        .expect("g++ must be available in the nix development environment");
+    assert!(
+        status.success(),
+        "g++ must be runnable in the nix development environment"
+    );
+    cxx.to_string()
 }
 
 fn require_nix_riscv() -> NixRiscv {

@@ -45,24 +45,24 @@
 
             pkgs.verilator
             pkgs.bebop
+            pkgs.base.clang
             # Use gcc13 instead of gcc8 for P2E vvac builds
             pkgs.gcc13
-            # pkgs.gcc
 
             # P2E waveform tools
             pkgs.p2e.gtkwave
           ] ++ pkgs.riscv.buildInputs ++ pkgs.bemu.buildInputs;
 
           shellHook = ''
-            # Put gcc13 at the front of PATH for P2E vvac builds
-            # export PATH="${pkgs.gcc13}/bin:$PATH"
-            # hash -r
+            export CC="${pkgs.base.clang}/bin/clang"
+            export CXX="${pkgs.base.clang}/bin/clang++"
           '' + pkgs.riscv.shellHook + pkgs.bemu.shellHook + ''
             echo "================= bebop development environment activated ========================="
             echo "Enable nodes including:"
             echo "bebop: $(command -v bebop)"
             echo "riscv gcc: $(command -v riscv64-none-elf-gcc)"
             echo "verilator: $(command -v verilator)"
+            echo "CXX: $CXX"
             echo "==========================================================================="
           '';
         };

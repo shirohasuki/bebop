@@ -1,28 +1,10 @@
 use super::trace::with_current_trace;
-use std::fs::{File, OpenOptions};
-use std::io;
-use std::path::Path;
-
-const LOG_FILE: &str = "itrace.ndjson";
 
 pub struct ITraceEvent {
     pub funct: u32,
     pub pc: u64,
     pub rs1: u64,
     pub rs2: u64,
-}
-
-pub(super) fn init(log_dir: &Path, enabled: bool) -> io::Result<Option<File>> {
-    if !enabled {
-        return Ok(None);
-    }
-
-    OpenOptions::new()
-        .create(true)
-        .write(true)
-        .truncate(true)
-        .open(log_dir.join(LOG_FILE))
-        .map(Some)
 }
 
 pub fn itrace(event: ITraceEvent) {

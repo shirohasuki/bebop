@@ -8,7 +8,6 @@ members = [
   "src/nodes/lib/rtl-trace",
   "src/nodes/lib/uart",
   "src/nodes/verilator",
-  "src/nodes/bemu",
   "src/nodes/p2e",
 ]
 resolver = "2"
@@ -29,12 +28,6 @@ name = "bebop"
 path = "src/main.rs"
 
 [[test]]
-name = "test_bemu"
-path = "tests/test_bemu.rs"
-harness = false
-required-features = ["bemu"]
-
-[[test]]
 name = "test_verilator"
 path = "tests/test_verilator.rs"
 harness = false
@@ -49,12 +42,11 @@ required-features = ["p2e"]
 [features]
 default = []
 verilator = ["dep:bebop-verilator"]
-bemu = ["dep:bebop-bemu"]
 p2e = ["dep:bebop-p2e"]
+difftest = []
 
 [dependencies]
 bebop-verilator = { path = "src/nodes/verilator", optional = true }
-bebop-bemu = { path = "src/nodes/bemu", optional = true }
 bebop-p2e = { path = "src/nodes/p2e", optional = true }
 bebop-dasm = { path = "src/nodes/lib/dasm" }
 bebop-bank-hash = { path = "src/nodes/lib/bank-hash" }

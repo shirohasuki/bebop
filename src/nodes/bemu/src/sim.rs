@@ -33,29 +33,23 @@ pub struct BemuInstance {
 
 impl BemuInstance {
     pub fn new(log_dir: &Path, trace_config: TraceConfig, disasm: bool, profile: bool) -> Result<Self, Whatever> {
-        let top_config = Path::new(crate::BEMU_TOP_CONFIG);
-        let top_config = if top_config.is_absolute() {
-            top_config.to_path_buf()
-        } else {
-            Path::new(env!("CARGO_MANIFEST_DIR")).join("src").join(top_config)
-        };
-        crate::config::configure_topology(&top_config);
+        crate::config::configure_default();
         Ok(Self {
             spike: SpikeInstance::new(log_dir, trace_config, disasm, profile, 0, None)
                 .whatever_context("failed to create spike instance")?,
         })
     }
 
-    /// Create a worker bound to one concrete Core TOML. The caller must invoke
-    /// this on the worker thread; configuration is deliberately thread-local.
+    /// Create a worker bound to one chip-bundle core index. The caller must
+    /// invoke this on the worker thread; configuration is deliberately thread-local.
     pub fn new_with_core(
         log_dir: &Path,
         trace_config: TraceConfig,
         disasm: bool,
         profile: bool,
-        core_config: &Path,
+        core_index: usize,
     ) -> Result<Self, Whatever> {
-        Self::new_with_core_hart(log_dir, trace_config, disasm, profile, core_config, 0, None, None)
+        Self::new_with_core_hart(log_dir, trace_config, disasm, profile, core_index, 0, None, None)
     }
 
     pub fn new_with_core_hart(
@@ -63,20 +57,15 @@ impl BemuInstance {
         trace_config: TraceConfig,
         disasm: bool,
         profile: bool,
-        core_config: &Path,
+        core_index: usize,
         hart_id: usize,
         shared_memory: Option<Arc<SharedMemory>>,
         virtual_bank_count: Option<usize>,
     ) -> Result<Self, Whatever> {
-        let core_config = if core_config.is_absolute() {
-            core_config.to_path_buf()
-        } else {
-            Path::new(env!("CARGO_MANIFEST_DIR")).join("src").join(core_config)
-        };
         if let Some(virtual_bank_count) = virtual_bank_count {
-            crate::config::configure_with_virtual_bank_count(&core_config, virtual_bank_count);
+            crate::config::configure_core_with_virtual_bank_count(core_index, virtual_bank_count);
         } else {
-            crate::config::configure(&core_config);
+            crate::config::configure_core(core_index);
         }
         Ok(Self {
             spike: SpikeInstance::new(log_dir, trace_config, disasm, profile, hart_id, shared_memory)

@@ -27,7 +27,15 @@ impl SpikeInstance {
             .as_deref()
             .map(|path| path.to_str().ok_or_else(|| "invalid log_dir path".to_string()))
             .transpose()?;
-        let native = create_spike(isa, hart_id, shared_memory, disasm_log_file, log_dir, trace_config, profile)?;
+        let native = create_spike(
+            isa,
+            hart_id,
+            shared_memory,
+            disasm_log_file,
+            log_dir,
+            trace_config,
+            profile,
+        )?;
 
         Ok(Self { mem_mb: 2048, native })
     }

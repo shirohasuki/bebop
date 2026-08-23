@@ -1,17 +1,20 @@
 use clap::Parser;
 use std::path::PathBuf;
 
-/// Environment variables for bbdev-driven regression runs
-/// (nextest does not allow custom CLI args after `--`, so we use envs).
-const ENV_WORKLOAD_TOML: &str = "BEBOP_WORKLOAD_TOML";
-const ENV_BB_TESTS_ROOT: &str = "BEBOP_BB_TESTS_ROOT";
-#[cfg(feature = "p2e")]
-const ENV_P2E_BITSTREAM: &str = "BEBOP_P2E_BITSTREAM";
-
 #[derive(Parser, Debug, Clone)]
 #[command(name = "elf-regression")]
 #[command(about = "ELF regression test harness for bebop")]
 pub struct RegressionArgs {
+    #[arg(long, value_name = "PATH")]
+    pub workload_toml: Option<PathBuf>,
+
+    #[arg(long, value_name = "DIR")]
+    pub bb_tests_root: Option<PathBuf>,
+
+    #[cfg(feature = "p2e")]
+    #[arg(long, value_name = "PATH")]
+    pub p2e_bitstream: Option<PathBuf>,
+
     #[arg(long, value_name = "PATTERN")]
     pub filter: Option<String>,
 
@@ -53,24 +56,15 @@ pub struct RegressionArgs {
 }
 
 impl RegressionArgs {
-    /// Workload toml path read from BEBOP_WORKLOAD_TOML env var.
-    pub fn workload_toml(&self) -> Option<PathBuf> {
-        std::env::var_os(ENV_WORKLOAD_TOML).map(PathBuf::from)
-    }
-
-    /// Root directory that `search_path` in workloads.toml is resolved against.
-    /// Read from BEBOP_BB_TESTS_ROOT; defaults to `../bb-tests/output` relative
-    /// to the bebop crate (compatible with the pre-bbdev developer workflow).
     pub fn bb_tests_root(&self) -> PathBuf {
-        std::env::var_os(ENV_BB_TESTS_ROOT)
-            .map(PathBuf::from)
-            .unwrap_or_else(|| PathBuf::from("../bb-tests/output"))
+        self.bb_tests_root.clone().expect("--bb-tests-root is required")
     }
 
-    /// P2E bitstream path read from BEBOP_P2E_BITSTREAM env var.
     #[cfg(feature = "p2e")]
-    pub fn p2e_bitstream(&self) -> Option<PathBuf> {
-        std::env::var_os(ENV_P2E_BITSTREAM).map(PathBuf::from)
+    pub fn p2e_bitstream(&self) -> PathBuf {
+        self.p2e_bitstream
+            .clone()
+            .expect("--p2e-bitstream is required for test_p2e")
     }
 
     pub fn libtest_forward_flags(&self) -> Vec<String> {

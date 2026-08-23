@@ -6,6 +6,8 @@ struct Args {
     elf: Option<PathBuf>,
     log_dir: Option<PathBuf>,
     pk: bool,
+    itrace: bool,
+    mtrace: bool,
 }
 
 fn main() {
@@ -22,14 +24,12 @@ fn run() -> Result<(), String> {
         .log_dir
         .ok_or_else(|| "missing required argument --log-dir".to_string())?;
 
-    let trace_config = TraceConfig::new(false, false);
-    let mut bemu = BemuInstance::new(&log_dir, trace_config, false, false, 1).map_err(|e| e.to_string())?;
+    let trace_config = TraceConfig::new(args.itrace, args.mtrace);
+    let mut bemu = BemuInstance::new(&log_dir, trace_config, false, false).map_err(|e| e.to_string())?;
     bemu.load_elf(&elf).map_err(|e| e.to_string())?;
     bemu.init_hart(args.pk).map_err(|e| e.to_string())?;
-    loop {
-        if bemu.step().map_err(|e| e.to_string())? {
-            break;
-        }
+    while !bemu.finished() {
+        bemu.step().map_err(|e| e.to_string())?;
     }
 
     let exit_code = bemu.exit_code().unwrap_or(0);
@@ -65,6 +65,8 @@ where
                 ));
             }
             "--pk" => parsed.pk = true,
+            "--itrace" => parsed.itrace = true,
+            "--mtrace" => parsed.mtrace = true,
             other => return Err(format!("unknown argument {other}")),
         }
         i += 1;

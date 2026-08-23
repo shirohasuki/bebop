@@ -118,6 +118,10 @@ pub enum RunTarget {
         disasm: bool,
         #[arg(long, help = "Print coarse host-time breakdown for BEMU execution")]
         tool_profile: bool,
+        #[arg(long, help = "Enable BEMU instruction trace into bdb.ndjson")]
+        itrace: bool,
+        #[arg(long, help = "Enable BEMU memory trace into bdb.ndjson")]
+        mtrace: bool,
     },
     /// Run a workload on a P2E simulator artifact.
     P2e {

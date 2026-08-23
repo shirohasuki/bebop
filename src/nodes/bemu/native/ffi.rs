@@ -23,8 +23,10 @@ const DRAM_BASE: u64 = 0x80000000;
 const UART_BASE: u64 = 0x60020000;
 const PAGE_SIZE: u64 = 4096;
 const USER_TOP: u64 = 0x40_0000_0000;
+// musl __mmap64 treats syscall results with a0 > 0xfffff000 as errors.
+const PK_MMAP_CEILING: u64 = 0x8000_0000;
 const USER_STACK_SIZE: u64 = 8 * 1024 * 1024;
-const PK_PT_RESERVE: u64 = 2 * 1024 * 1024;
+const PK_PT_RESERVE: u64 = 16 * 1024 * 1024;
 const PK_HIGH_RESERVE: u64 = 64 * 1024 * 1024;
 const SYS_BRK: u64 = 214;
 const SYS_MMAP: u64 = 222;
@@ -153,7 +155,6 @@ struct EmuState {
     bank_scoreboard: inst::instruction::BankScoreboard,
     deferred_bank_frees: Vec<u32>,
     mmio_banks: Vec<Vec<u8>>,
-    mmio_region_table: Vec<crate::inst::instruction::MmioRegion>,
     total_lat: u64,
     npu_instruction_id: u64,
     matrix_instruction_count: u64,
@@ -174,7 +175,7 @@ impl EmuState {
     ) -> Result<Self, String> {
         // 1GB Here is important, for baremetal mode, when we set this to 4GB,
         // it will running for a long time.
-        const MEM_SIZE: usize = 1 << 30;
+        const MEM_SIZE: usize = 3 * (1 << 30);
         Ok(Self {
             // memory is maintained by bemu not spike
             memory: shared_memory.map_or_else(|| GuestMemory::Owned(vec![0; MEM_SIZE]), GuestMemory::Shared),
@@ -184,7 +185,6 @@ impl EmuState {
             bank_scoreboard: inst::instruction::BankScoreboard::new(),
             deferred_bank_frees: Vec::new(),
             mmio_banks: vec![vec![0; mmio_bank_size()]; mmio_bank_num()],
-            mmio_region_table: vec![crate::inst::instruction::MmioRegion::default(); bank_num()],
             total_lat: 0,
             npu_instruction_id: 0,
             matrix_instruction_count: 0,
@@ -208,8 +208,6 @@ impl EmuState {
         for bank in &mut self.mmio_banks {
             bank.fill(0);
         }
-        self.mmio_region_table
-            .fill(crate::inst::instruction::MmioRegion::default());
         self.total_lat = 0;
         self.npu_instruction_id = 0;
         self.matrix_instruction_count = 0;
@@ -227,7 +225,6 @@ impl EmuState {
             bank_scoreboard: inst::instruction::BankScoreboard::new(),
             deferred_bank_frees: Vec::new(),
             mmio_banks: vec![vec![0; mmio_bank_size()]; mmio_bank_num()],
-            mmio_region_table: vec![crate::inst::instruction::MmioRegion::default(); bank_num()],
             total_lat: 0,
             npu_instruction_id: 0,
             matrix_instruction_count: 0,
@@ -242,10 +239,27 @@ impl EmuState {
 }
 
 enum HostCommand {
-    Execute { funct7: u32, xs1: u64, xs2: u64, reply: mpsc::Sender<u64> },
-    Mvin { xs1: u64, packed_xs2: u64, host_ptr: usize, reply: mpsc::Sender<()> },
-    Mvout { xs1: u64, packed_xs2: u64, host_ptr: usize, reply: mpsc::Sender<()> },
-    Cycles { reply: mpsc::Sender<u64> },
+    Execute {
+        funct7: u32,
+        xs1: u64,
+        xs2: u64,
+        reply: mpsc::Sender<u64>,
+    },
+    Mvin {
+        xs1: u64,
+        packed_xs2: u64,
+        host_ptr: usize,
+        reply: mpsc::Sender<()>,
+    },
+    Mvout {
+        xs1: u64,
+        packed_xs2: u64,
+        host_ptr: usize,
+        reply: mpsc::Sender<()>,
+    },
+    Cycles {
+        reply: mpsc::Sender<u64>,
+    },
     Shutdown,
 }
 
@@ -259,8 +273,7 @@ struct HostState {
     accelerators: HashMap<u32, HostAccelerator>,
 }
 
-static HOST_STATE: once_cell::sync::Lazy<Mutex<Option<HostState>>> =
-    once_cell::sync::Lazy::new(|| Mutex::new(None));
+static HOST_STATE: once_cell::sync::Lazy<Mutex<Option<HostState>>> = once_cell::sync::Lazy::new(|| Mutex::new(None));
 
 thread_local! {
     // Selection belongs to the host caller. A global selected Core would race
@@ -277,15 +290,30 @@ fn spawn_host_accelerator(accelerator_id: u32, chip_id: i32) -> HostAccelerator 
             let mut state = EmuState::new_host();
             while let Ok(command) = receiver.recv() {
                 match command {
-                    HostCommand::Execute { funct7, xs1, xs2, reply } => {
+                    HostCommand::Execute {
+                        funct7,
+                        xs1,
+                        xs2,
+                        reply,
+                    } => {
                         let _ = reply.send(host_execute(&mut state, funct7, xs1, xs2));
                     }
-                    HostCommand::Mvin { xs1, packed_xs2, host_ptr, reply } => {
+                    HostCommand::Mvin {
+                        xs1,
+                        packed_xs2,
+                        host_ptr,
+                        reply,
+                    } => {
                         state.total_lat += inst::decode::cycles_after_issue(FUNCT7_MVIN, xs1, packed_xs2);
                         host_mvin(&mut state, xs1, packed_xs2, host_ptr as *const u8);
                         let _ = reply.send(());
                     }
-                    HostCommand::Mvout { xs1, packed_xs2, host_ptr, reply } => {
+                    HostCommand::Mvout {
+                        xs1,
+                        packed_xs2,
+                        host_ptr,
+                        reply,
+                    } => {
                         state.total_lat += inst::decode::cycles_after_issue(FUNCT7_MVOUT, xs1, packed_xs2);
                         host_mvout(&mut state, xs1, packed_xs2, host_ptr as *mut u8);
                         let _ = reply.send(());
@@ -296,9 +324,7 @@ fn spawn_host_accelerator(accelerator_id: u32, chip_id: i32) -> HostAccelerator 
                     HostCommand::Shutdown => {
                         eprintln!(
                             "[INFO] rushB BEMU Core {accelerator_id}: instructions={} matrix={} cycles={}",
-                            state.npu_instruction_id,
-                            state.matrix_instruction_count,
-                            state.total_lat
+                            state.npu_instruction_id, state.matrix_instruction_count, state.total_lat
                         );
                         break;
                     }
@@ -306,14 +332,20 @@ fn spawn_host_accelerator(accelerator_id: u32, chip_id: i32) -> HostAccelerator 
             }
         })
         .expect("failed to start rushB BEMU Core worker");
-    HostAccelerator { chip_id, commands, worker }
+    HostAccelerator {
+        chip_id,
+        commands,
+        worker,
+    }
 }
 
 fn with_selected_accelerator<R>(f: impl FnOnce(&mpsc::Sender<HostCommand>) -> R) -> R {
     let (accelerator_id, chip_id) = HOST_SELECTION.with(Cell::get);
     let mut guard = HOST_STATE.lock().expect("rushB BEMU state poisoned");
     let state = guard.as_mut().expect("rushB is not initialized; call rushb_init first");
-    let accelerator = state.accelerators.entry(accelerator_id)
+    let accelerator = state
+        .accelerators
+        .entry(accelerator_id)
         .or_insert_with(|| spawn_host_accelerator(accelerator_id, chip_id));
     assert_eq!(accelerator.chip_id, chip_id, "rushB Core cannot move between chips");
     f(&accelerator.commands)
@@ -329,7 +361,10 @@ fn host_execute(state: &mut EmuState, funct7: u32, xs1: u64, xs2: u64) -> u64 {
     if consumes_npu_instruction_id(funct7) {
         state.npu_instruction_id = state.npu_instruction_id.wrapping_add(1);
     }
-    if matches!(funct7, 65 | 66) {
+    if matches!(
+        crate::config::ball_domain::mnemonic_for_funct(funct7).as_deref(),
+        Some("SMATMUL_OS" | "SMATMUL_WS")
+    ) {
         state.matrix_instruction_count = state.matrix_instruction_count.wrapping_add(1);
     }
     let instruction_id = state.npu_instruction_id;
@@ -341,7 +376,6 @@ fn host_execute(state: &mut EmuState, funct7: u32, xs1: u64, xs2: u64) -> u64 {
         bank_map: &mut state.bank_map,
         deferred_bank_frees: &mut state.deferred_bank_frees,
         mmio_banks: &mut state.mmio_banks,
-        mmio_region_table: &mut state.mmio_region_table,
         barrier_hit: &mut state.barrier_hit,
     };
     let result =
@@ -460,7 +494,9 @@ fn host_mvout(state: &mut EmuState, xs1: u64, packed_xs2: u64, host_ptr: *mut u8
 pub extern "C" fn rushb_init() {
     let mut guard = HOST_STATE.lock().expect("rushB BEMU state poisoned");
     assert!(guard.is_none(), "rushB BEMU is already initialized");
-    *guard = Some(HostState { accelerators: HashMap::new() });
+    *guard = Some(HostState {
+        accelerators: HashMap::new(),
+    });
     HOST_SELECTION.with(|selection| selection.set((0, 0)));
 }
 
@@ -486,7 +522,13 @@ pub extern "C" fn rushb_destroy() {
 pub extern "C" fn rushb_mset(xs1: u64, xs2: u64) {
     with_selected_accelerator(|commands| {
         let (reply, result) = mpsc::channel();
-        commands.send(HostCommand::Execute { funct7: FUNCT7_MSET, xs1, xs2, reply })
+        commands
+            .send(HostCommand::Execute {
+                funct7: FUNCT7_MSET,
+                xs1,
+                xs2,
+                reply,
+            })
             .expect("rushB BEMU Core worker stopped");
         result.recv().expect("rushB BEMU Core worker stopped");
     });
@@ -496,9 +538,14 @@ pub extern "C" fn rushb_mset(xs1: u64, xs2: u64) {
 pub extern "C" fn rushb_mvin(xs1: u64, packed_xs2: u64, host_ptr: *const c_void) {
     with_selected_accelerator(|commands| {
         let (reply, result) = mpsc::channel();
-        commands.send(HostCommand::Mvin {
-            xs1, packed_xs2, host_ptr: host_ptr as usize, reply,
-        }).expect("rushB BEMU Core worker stopped");
+        commands
+            .send(HostCommand::Mvin {
+                xs1,
+                packed_xs2,
+                host_ptr: host_ptr as usize,
+                reply,
+            })
+            .expect("rushB BEMU Core worker stopped");
         result.recv().expect("rushB BEMU Core worker stopped");
     });
 }
@@ -507,9 +554,14 @@ pub extern "C" fn rushb_mvin(xs1: u64, packed_xs2: u64, host_ptr: *const c_void)
 pub extern "C" fn rushb_mvout(xs1: u64, packed_xs2: u64, host_ptr: *mut c_void) {
     with_selected_accelerator(|commands| {
         let (reply, result) = mpsc::channel();
-        commands.send(HostCommand::Mvout {
-            xs1, packed_xs2, host_ptr: host_ptr as usize, reply,
-        }).expect("rushB BEMU Core worker stopped");
+        commands
+            .send(HostCommand::Mvout {
+                xs1,
+                packed_xs2,
+                host_ptr: host_ptr as usize,
+                reply,
+            })
+            .expect("rushB BEMU Core worker stopped");
         result.recv().expect("rushB BEMU Core worker stopped");
     });
 }
@@ -518,7 +570,13 @@ pub extern "C" fn rushb_mvout(xs1: u64, packed_xs2: u64, host_ptr: *mut c_void) 
 pub extern "C" fn rushb_custom(xs1: u64, xs2: u64, funct7: u32) {
     with_selected_accelerator(|commands| {
         let (reply, result) = mpsc::channel();
-        commands.send(HostCommand::Execute { funct7, xs1, xs2, reply })
+        commands
+            .send(HostCommand::Execute {
+                funct7,
+                xs1,
+                xs2,
+                reply,
+            })
             .expect("rushB BEMU Core worker stopped");
         result.recv().expect("rushB BEMU Core worker stopped");
     });
@@ -528,12 +586,19 @@ pub extern "C" fn rushb_custom(xs1: u64, xs2: u64, funct7: u32) {
 pub extern "C" fn rushb_cycles() -> u64 {
     let guard = HOST_STATE.lock().expect("rushB BEMU state poisoned");
     let state = guard.as_ref().expect("rushB is not initialized; call rushb_init first");
-    state.accelerators.values().map(|accelerator| {
-        let (reply, result) = mpsc::channel();
-        accelerator.commands.send(HostCommand::Cycles { reply })
-            .expect("rushB BEMU Core worker stopped");
-        result.recv().expect("rushB BEMU Core worker stopped")
-    }).max().unwrap_or(0)
+    state
+        .accelerators
+        .values()
+        .map(|accelerator| {
+            let (reply, result) = mpsc::channel();
+            accelerator
+                .commands
+                .send(HostCommand::Cycles { reply })
+                .expect("rushB BEMU Core worker stopped");
+            result.recv().expect("rushB BEMU Core worker stopped")
+        })
+        .max()
+        .unwrap_or(0)
 }
 
 #[derive(Clone, Copy)]
@@ -727,7 +792,6 @@ pub extern "C" fn buckyball_exec(state: *mut c_void, funct7: u8, xs1: u64, xs2: 
         bank_scoreboard,
         deferred_bank_frees,
         mmio_banks,
-        mmio_region_table,
         barrier_hit,
         uart: _,
         syscall: _,
@@ -745,7 +809,6 @@ pub extern "C" fn buckyball_exec(state: *mut c_void, funct7: u8, xs1: u64, xs2: 
                 bank_map,
                 deferred_bank_frees,
                 mmio_banks,
-                mmio_region_table,
                 barrier_hit,
             };
 
@@ -1083,7 +1146,7 @@ fn hart_init(ctx: *mut c_void, state: &mut EmuState, load: LoadInfo, mem_mb: usi
         align_up(load.image_end, PAGE_SIZE)
     };
     let mmap_base = if pk {
-        align_down(USER_TOP - USER_STACK_SIZE - 8 * 1024 * 1024, PAGE_SIZE)
+        align_down(PK_MMAP_CEILING, PAGE_SIZE)
     } else {
         align_down(mem_end - 8 * 1024 * 1024, PAGE_SIZE)
     };

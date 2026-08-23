@@ -1,6 +1,6 @@
-use super::{btrace, itrace, mtrace};
+use super::btrace;
 use std::cell::Cell;
-use std::fs::File;
+use std::fs::{File, OpenOptions};
 use std::io;
 use std::io::Write;
 use std::path::Path;
@@ -11,8 +11,9 @@ thread_local! {
 
 #[derive(Default)]
 pub struct TraceState {
-    pub(super) itrace_file: Option<File>,
-    pub(super) mtrace_file: Option<File>,
+    pub(super) bdb_file: Option<File>,
+    pub(super) itrace: bool,
+    pub(super) mtrace: bool,
     pub(super) clk: u64,
     pub(super) btrace: btrace::BtraceState,
 }
@@ -37,9 +38,21 @@ impl TraceConfig {
 impl TraceState {
     pub fn new(log_dir: &Path, config: TraceConfig) -> io::Result<Self> {
         std::fs::create_dir_all(log_dir)?;
+        let bdb_file = if config.itrace || config.mtrace {
+            Some(
+                OpenOptions::new()
+                    .create(true)
+                    .write(true)
+                    .truncate(true)
+                    .open(log_dir.join("bdb.ndjson"))?,
+            )
+        } else {
+            None
+        };
         Ok(Self {
-            itrace_file: itrace::init(log_dir, config.itrace)?,
-            mtrace_file: mtrace::init(log_dir, config.mtrace)?,
+            bdb_file,
+            itrace: config.itrace,
+            mtrace: config.mtrace,
             btrace: btrace::init(log_dir, config.btrace)?,
             clk: 0,
         })
@@ -58,18 +71,26 @@ impl TraceState {
     }
 
     pub(super) fn write_itrace(&mut self, json: &str) {
-        write_ndjson(&mut self.itrace_file, json);
+        if self.itrace {
+            write_ndjson(&mut self.bdb_file, json);
+        }
     }
 
     pub(super) fn write_mtrace(&mut self, json: &str) {
-        write_ndjson(&mut self.mtrace_file, json);
+        if self.mtrace {
+            write_ndjson(&mut self.bdb_file, json);
+        }
     }
 }
 
 fn write_ndjson(file: &mut Option<File>, json: &str) {
     if let Some(file) = file.as_mut() {
-        writeln!(file, "{}", json).ok();
-        file.flush().ok();
+        writeln!(file, "{}", json).unwrap_or_else(|e| {
+            panic!("failed to write bemu ndjson trace: {e}");
+        });
+        file.flush().unwrap_or_else(|e| {
+            panic!("failed to flush bemu ndjson trace: {e}");
+        });
     }
 }
 
@@ -99,8 +120,4 @@ pub(super) fn with_current_trace(f: impl FnOnce(&mut TraceState)) {
             f(unsafe { &mut *trace });
         }
     });
-}
-
-pub(super) fn bytes_to_hex(bytes: &[u8]) -> String {
-    bytes.iter().rev().map(|b| format!("{:02x}", b)).collect()
 }
