@@ -10,6 +10,7 @@
 #include <mutex>
 #include <optional>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 // Context management
@@ -84,6 +85,7 @@ static std::mutex g_scu_mutex;
 // occur only while that model is being stepped.
 // =============================================================================
 struct RushBCommand {
+  uint64_t tag;
   uint64_t xs1;
   uint64_t xs2;
   uint32_t funct7;
@@ -93,10 +95,11 @@ struct RushBChannel {
   std::optional<RushBCommand> pending;
   uint64_t probes = 0;
   uint64_t accepted = 0;
+  uint64_t completed = 0;
   bool last_ready = false;
   bool last_retired = false;
-  bool inflight = false;
-  bool complete = false;
+  std::unordered_set<uint64_t> inflight;
+  std::deque<uint64_t> completed_tags;
 };
 
 static std::unordered_map<uint32_t, RushBChannel> g_rushb_channels;
@@ -104,24 +107,24 @@ static std::unordered_map<uint32_t, RushBChannel> g_rushb_channels;
 extern "C" void verilator_rushb_clear() { g_rushb_channels.clear(); }
 
 extern "C" void verilator_rushb_submit(uint32_t accelerator_id,
-                                           uint64_t xs1, uint64_t xs2,
-                                           uint32_t funct7) {
+                                           uint64_t tag, uint64_t xs1,
+                                           uint64_t xs2, uint32_t funct7) {
   auto &channel = g_rushb_channels[accelerator_id];
-  if (channel.inflight || channel.pending.has_value()) {
+  if (channel.pending.has_value()) {
     fprintf(stderr,
-            "verilator rushB only permits one synchronous command per "
-            "accelerator\n");
+            "verilator rushB only permits one pending command per "
+            "accelerator; accepted commands may remain in flight\n");
     abort();
   }
-  channel.pending = RushBCommand{xs1, xs2, funct7};
-  channel.complete = false;
+  channel.pending = RushBCommand{tag, xs1, xs2, funct7};
 }
 
 extern "C" void verilator_rushb_peek(uint32_t accelerator_id,
                                          uint8_t *valid, uint64_t *xs1,
-                                         uint64_t *xs2, uint32_t *funct7) {
+                                         uint64_t *xs2, uint64_t *tag,
+                                         uint32_t *funct7) {
   if (valid == nullptr || xs1 == nullptr || xs2 == nullptr ||
-      funct7 == nullptr) {
+      tag == nullptr || funct7 == nullptr) {
     fprintf(stderr, "verilator_rushb_peek received null output pointer\n");
     abort();
   }
@@ -131,6 +134,7 @@ extern "C" void verilator_rushb_peek(uint32_t accelerator_id,
     *valid = 0;
     *xs1 = 0;
     *xs2 = 0;
+    *tag = 0;
     *funct7 = 0;
     return;
   }
@@ -138,6 +142,7 @@ extern "C" void verilator_rushb_peek(uint32_t accelerator_id,
   *valid = 1;
   *xs1 = cmd.xs1;
   *xs2 = cmd.xs2;
+  *tag = cmd.tag;
   *funct7 = cmd.funct7;
 }
 
@@ -150,50 +155,78 @@ extern "C" void verilator_rushb_observe(uint32_t accelerator_id,
 
 extern "C" void verilator_rushb_accept(uint32_t accelerator_id) {
   auto &channel = g_rushb_channels[accelerator_id];
-  if (!channel.pending.has_value() || channel.inflight) {
+  if (!channel.pending.has_value()) {
     fprintf(stderr, "verilator rushB accepted an invalid command\n");
+    abort();
+  }
+  const uint64_t tag = channel.pending->tag;
+  if (!channel.inflight.insert(tag).second) {
+    fprintf(stderr, "verilator rushB accepted a duplicate command tag\n");
     abort();
   }
   channel.pending.reset();
   channel.accepted++;
-  channel.inflight = true;
-  channel.complete = false;
 }
 
 extern "C" void
-verilator_rushb_complete_on_accept(uint32_t accelerator_id) {
+verilator_rushb_complete_on_accept(uint32_t accelerator_id, uint64_t tag) {
   auto &channel = g_rushb_channels[accelerator_id];
-  if (!channel.inflight || channel.complete) {
+  if (channel.inflight.erase(tag) != 1) {
     fprintf(stderr,
             "verilator rushB completed an invalid accepted command\n");
     abort();
   }
-  channel.inflight = false;
-  channel.complete = true;
+  channel.completed++;
+  channel.completed_tags.push_back(tag);
 }
 
 extern "C" void verilator_rushb_report(uint32_t accelerator_id,
-                                           uint8_t retired) {
+                                           uint8_t retired, uint64_t tag) {
   auto &channel = g_rushb_channels[accelerator_id];
   channel.last_retired = retired != 0;
-  if (!channel.inflight) {
+  if (!retired) {
     return;
   }
 
-  // rushB permits one command per accelerator, so a GlobalROB retirement
-  // event is the exact completion signal for its in-flight host command.
-  if (retired) {
-    channel.inflight = false;
-    channel.complete = true;
+  if (channel.inflight.empty()) {
+    return;
   }
+  if (channel.inflight.erase(tag) != 1) {
+    fprintf(stderr,
+            "verilator rushB completed an unknown command tag: "
+            "accelerator=%u tag=%llu\n",
+            accelerator_id, static_cast<unsigned long long>(tag));
+    abort();
+  }
+  channel.completed++;
+  channel.completed_tags.push_back(tag);
 }
 
 extern "C" uint64_t verilator_rushb_accepted(uint32_t accelerator_id) {
   return g_rushb_channels[accelerator_id].accepted;
 }
 
-extern "C" bool verilator_rushb_complete(uint32_t accelerator_id) {
-  return g_rushb_channels[accelerator_id].complete;
+extern "C" uint64_t verilator_rushb_completed(uint32_t accelerator_id) {
+  return g_rushb_channels[accelerator_id].completed;
+}
+
+extern "C" uint64_t verilator_rushb_inflight(uint32_t accelerator_id) {
+  return g_rushb_channels[accelerator_id].inflight.size();
+}
+
+extern "C" bool verilator_rushb_take_completed(uint32_t accelerator_id,
+                                                  uint64_t *tag) {
+  if (tag == nullptr) {
+    fprintf(stderr, "verilator_rushb_take_completed received null tag\n");
+    abort();
+  }
+  auto &completed = g_rushb_channels[accelerator_id].completed_tags;
+  if (completed.empty()) {
+    return false;
+  }
+  *tag = completed.front();
+  completed.pop_front();
+  return true;
 }
 
 extern "C" uint64_t verilator_rushb_probes(uint32_t accelerator_id) {

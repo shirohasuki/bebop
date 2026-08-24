@@ -38,10 +38,12 @@ extern "C" {
 
     // rushB command bridge.
     pub fn verilator_rushb_clear();
-    pub fn verilator_rushb_submit(accelerator_id: u32, xs1: u64, xs2: u64, funct7: u32);
+    pub fn verilator_rushb_submit(accelerator_id: u32, tag: u64, xs1: u64, xs2: u64, funct7: u32);
     pub fn verilator_rushb_accepted(accelerator_id: u32) -> u64;
-    pub fn verilator_rushb_complete_on_accept(accelerator_id: u32);
-    pub fn verilator_rushb_complete(accelerator_id: u32) -> bool;
+    pub fn verilator_rushb_complete_on_accept(accelerator_id: u32, tag: u64);
+    pub fn verilator_rushb_completed(accelerator_id: u32) -> u64;
+    pub fn verilator_rushb_inflight(accelerator_id: u32) -> u64;
+    pub fn verilator_rushb_take_completed(accelerator_id: u32, tag: *mut u64) -> bool;
     pub fn verilator_rushb_probes(accelerator_id: u32) -> u64;
     pub fn verilator_rushb_last_ready(accelerator_id: u32) -> bool;
     pub fn verilator_rushb_last_retired(accelerator_id: u32) -> bool;

@@ -1,6 +1,7 @@
 //! Shared Rust contract for the backend-neutral rushB host ABI.
 
 pub const FUNCT7_FENCE: u32 = 0;
+pub const FUNCT7_BARRIER: u32 = 1;
 pub const FUNCT7_MVOUT: u32 = 16;
 pub const FUNCT7_MSET: u32 = 32;
 pub const FUNCT7_MVIN: u32 = 33;
