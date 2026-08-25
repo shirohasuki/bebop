@@ -93,10 +93,10 @@ struct RushBChannel {
   std::optional<RushBCommand> pending;
   uint64_t probes = 0;
   uint64_t accepted = 0;
+  uint64_t completed = 0;
   bool last_ready = false;
   bool last_retired = false;
-  bool inflight = false;
-  bool complete = false;
+  uint64_t inflight = 0;
 };
 
 static std::unordered_map<uint32_t, RushBChannel> g_rushb_channels;
@@ -107,14 +107,13 @@ extern "C" void verilator_rushb_submit(uint32_t accelerator_id,
                                            uint64_t xs1, uint64_t xs2,
                                            uint32_t funct7) {
   auto &channel = g_rushb_channels[accelerator_id];
-  if (channel.inflight || channel.pending.has_value()) {
+  if (channel.pending.has_value()) {
     fprintf(stderr,
-            "verilator rushB only permits one synchronous command per "
-            "accelerator\n");
+            "verilator rushB only permits one pending command per "
+            "accelerator; accepted commands may remain in flight\n");
     abort();
   }
   channel.pending = RushBCommand{xs1, xs2, funct7};
-  channel.complete = false;
 }
 
 extern "C" void verilator_rushb_peek(uint32_t accelerator_id,
@@ -150,41 +149,40 @@ extern "C" void verilator_rushb_observe(uint32_t accelerator_id,
 
 extern "C" void verilator_rushb_accept(uint32_t accelerator_id) {
   auto &channel = g_rushb_channels[accelerator_id];
-  if (!channel.pending.has_value() || channel.inflight) {
+  if (!channel.pending.has_value()) {
     fprintf(stderr, "verilator rushB accepted an invalid command\n");
     abort();
   }
   channel.pending.reset();
   channel.accepted++;
-  channel.inflight = true;
-  channel.complete = false;
+  channel.inflight++;
 }
 
 extern "C" void
 verilator_rushb_complete_on_accept(uint32_t accelerator_id) {
   auto &channel = g_rushb_channels[accelerator_id];
-  if (!channel.inflight || channel.complete) {
+  if (channel.inflight == 0) {
     fprintf(stderr,
             "verilator rushB completed an invalid accepted command\n");
     abort();
   }
-  channel.inflight = false;
-  channel.complete = true;
+  channel.inflight--;
+  channel.completed++;
 }
 
 extern "C" void verilator_rushb_report(uint32_t accelerator_id,
                                            uint8_t retired) {
   auto &channel = g_rushb_channels[accelerator_id];
   channel.last_retired = retired != 0;
-  if (!channel.inflight) {
+  if (channel.inflight == 0) {
     return;
   }
 
-  // rushB permits one command per accelerator, so a GlobalROB retirement
-  // event is the exact completion signal for its in-flight host command.
+  // The accelerator reports completions in GlobalROB retirement order, so
+  // each pulse completes the oldest in-flight host command.
   if (retired) {
-    channel.inflight = false;
-    channel.complete = true;
+    channel.inflight--;
+    channel.completed++;
   }
 }
 
@@ -192,8 +190,12 @@ extern "C" uint64_t verilator_rushb_accepted(uint32_t accelerator_id) {
   return g_rushb_channels[accelerator_id].accepted;
 }
 
-extern "C" bool verilator_rushb_complete(uint32_t accelerator_id) {
-  return g_rushb_channels[accelerator_id].complete;
+extern "C" uint64_t verilator_rushb_completed(uint32_t accelerator_id) {
+  return g_rushb_channels[accelerator_id].completed;
+}
+
+extern "C" uint64_t verilator_rushb_inflight(uint32_t accelerator_id) {
+  return g_rushb_channels[accelerator_id].inflight;
 }
 
 extern "C" uint64_t verilator_rushb_probes(uint32_t accelerator_id) {
