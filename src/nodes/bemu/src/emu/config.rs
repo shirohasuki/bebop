@@ -1,8 +1,8 @@
 use std::cell::RefCell;
 
-mod bundle_config;
+mod chip_config;
 
-pub use bundle_config::{tile_topology, TileTopology, Topology};
+pub use chip_config::{tile_topology, TileTopology, Topology};
 
 thread_local! {
     static TOPOLOGY: RefCell<Option<Topology>> = const { RefCell::new(None) };
@@ -10,12 +10,12 @@ thread_local! {
 }
 
 pub fn configure_core(core_index: usize) {
-    TOPOLOGY.with(|slot| *slot.borrow_mut() = Some(bundle_config::topology_for_core(core_index)));
+    TOPOLOGY.with(|slot| *slot.borrow_mut() = Some(chip_config::topology_for_core(core_index)));
     VIRTUAL_BANK_COUNT.with(|slot| *slot.borrow_mut() = None);
 }
 
 pub fn configure_default() {
-    TOPOLOGY.with(|slot| *slot.borrow_mut() = Some(bundle_config::default_core()));
+    TOPOLOGY.with(|slot| *slot.borrow_mut() = Some(chip_config::default_core()));
     VIRTUAL_BANK_COUNT.with(|slot| *slot.borrow_mut() = None);
 }
 
@@ -26,10 +26,9 @@ pub fn configure_core_with_virtual_bank_count(core_index: usize, virtual_bank_co
 
 fn with_topology<R>(f: impl FnOnce(&Topology) -> R) -> R {
     TOPOLOGY.with(|slot| {
-        if slot.borrow().is_none() {
-            *slot.borrow_mut() = Some(bundle_config::default_core());
-        }
-        f(slot.borrow().as_ref().expect("BEMU topology is not configured"))
+        let borrow = slot.borrow();
+        let topology = borrow.as_ref().unwrap_or_else(|| panic!("BEMU topology is not configured"));
+        f(topology)
     })
 }
 

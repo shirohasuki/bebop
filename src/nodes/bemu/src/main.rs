@@ -1,12 +1,24 @@
-use bebop_bemu::{BemuInstance, TraceConfig};
+use bebop_bemu::{format_profile_report, print_profile_report, BemuInstance, TraceConfig};
+use clap::Parser;
 use std::path::PathBuf;
+use std::time::Instant;
 
-#[derive(Default)]
+#[derive(Parser)]
+#[command(name = "bebop-bemu")]
 struct Args {
-    elf: Option<PathBuf>,
-    log_dir: Option<PathBuf>,
+    #[arg(long)]
+    elf: PathBuf,
+    #[arg(long)]
+    log_dir: PathBuf,
+    #[arg(long)]
     pk: bool,
+    #[arg(long)]
+    disasm: bool,
+    #[arg(long = "tool-profile")]
+    tool_profile: bool,
+    #[arg(long)]
     itrace: bool,
+    #[arg(long)]
     mtrace: bool,
 }
 
@@ -18,59 +30,35 @@ fn main() {
 }
 
 fn run() -> Result<(), String> {
-    let args = parse_args(std::env::args().skip(1))?;
-    let elf = args.elf.ok_or_else(|| "missing required argument --elf".to_string())?;
-    let log_dir = args
-        .log_dir
-        .ok_or_else(|| "missing required argument --log-dir".to_string())?;
-
-    let trace_config = TraceConfig::new(args.itrace, args.mtrace);
-    let mut bemu = BemuInstance::new(&log_dir, trace_config, false, false).map_err(|e| e.to_string())?;
-    bemu.load_elf(&elf).map_err(|e| e.to_string())?;
+    let args = Args::parse();
+    let mut bemu = BemuInstance::new(
+        &args.log_dir,
+        TraceConfig::new(args.itrace, args.mtrace),
+        args.disasm,
+        args.tool_profile,
+    )
+    .map_err(|e| e.to_string())?;
+    bemu.load_elf(&args.elf).map_err(|e| e.to_string())?;
     bemu.init_hart(args.pk).map_err(|e| e.to_string())?;
+    let started = args.tool_profile.then(Instant::now);
     while !bemu.finished() {
         bemu.step().map_err(|e| e.to_string())?;
     }
+    if let Some(started) = started {
+        let report = bemu
+            .profile_report(started.elapsed())
+            .ok_or_else(|| "tool-profile enabled but no profile report".to_string())?;
+        print_profile_report(&report);
+        let profile_path = args.log_dir.join("tool-profile.txt");
+        std::fs::write(&profile_path, format_profile_report(&report))
+            .map_err(|e| format!("failed to write tool profile {}: {e}", profile_path.display()))?;
+    }
 
-    let exit_code = bemu.exit_code().unwrap_or(0);
+    let exit_code = bemu
+        .exit_code()
+        .ok_or_else(|| "bemu finished without an exit code".to_string())?;
     if exit_code != 0 {
         return Err(format!("bemu exited with code {exit_code}"));
     }
     Ok(())
-}
-
-fn parse_args<I>(args: I) -> Result<Args, String>
-where
-    I: IntoIterator<Item = String>,
-{
-    let mut args: Vec<_> = args.into_iter().collect();
-    if args.first().map(String::as_str) == Some("run") && args.get(1).map(String::as_str) == Some("bemu") {
-        args.drain(0..2);
-    }
-
-    let mut parsed = Args::default();
-    let mut i = 0;
-    while i < args.len() {
-        match args[i].as_str() {
-            "--elf" => {
-                i += 1;
-                parsed.elf = Some(PathBuf::from(
-                    args.get(i).ok_or_else(|| "--elf needs a value".to_string())?,
-                ));
-            }
-            "--log-dir" => {
-                i += 1;
-                parsed.log_dir = Some(PathBuf::from(
-                    args.get(i).ok_or_else(|| "--log-dir needs a value".to_string())?,
-                ));
-            }
-            "--pk" => parsed.pk = true,
-            "--itrace" => parsed.itrace = true,
-            "--mtrace" => parsed.mtrace = true,
-            other => return Err(format!("unknown argument {other}")),
-        }
-        i += 1;
-    }
-
-    Ok(parsed)
 }

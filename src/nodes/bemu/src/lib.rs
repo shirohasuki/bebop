@@ -25,7 +25,7 @@ pub use sim::BemuInstance;
 pub use trace::TraceConfig;
 
 /// Private-bank geometry used by an in-process RTL DiffTest monitor.
-/// Geometry follows the chip bundle baked at build time.
+/// Geometry follows chip.pb baked at build time.
 pub fn private_bank_geometry() -> (usize, usize) {
     (config::bank_size(), config::bank_row_bytes())
 }

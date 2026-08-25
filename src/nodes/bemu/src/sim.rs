@@ -40,7 +40,7 @@ impl BemuInstance {
         })
     }
 
-    /// Create a worker bound to one chip-bundle core index. The caller must
+    /// Create a worker bound to one chip.pb core index. The caller must
     /// invoke this on the worker thread; configuration is deliberately thread-local.
     pub fn new_with_core(
         log_dir: &Path,
