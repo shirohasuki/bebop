@@ -15,7 +15,27 @@ fn resolve_runner_bin() -> PathBuf {
     if let Some(path) = option_env!("CARGO_BIN_EXE_bebop_bemu") {
         return PathBuf::from(path);
     }
-    panic!("missing CARGO_BIN_EXE_bebop or CARGO_BIN_EXE_bebop_bemu for regression harness");
+    // Per-chip bemu crate: test file lives outside the package, so cargo does not
+    // inject CARGO_BIN_EXE_bebop_bemu. Resolve the sibling bin from this test exe:
+    //   <target>/<profile>/deps/<test-hash>  ->  <target>/<profile>/bebop-bemu
+    let exe = std::env::current_exe().unwrap_or_else(|e| {
+        panic!("resolve_runner_bin: cannot get current_exe: {e}")
+    });
+    let profile_dir = exe
+        .parent()
+        .and_then(|p| p.parent())
+        .unwrap_or_else(|| panic!("resolve_runner_bin: unexpected exe path: {}", exe.display()));
+    for cand in ["bebop-bemu", "bebop_bemu"] {
+        let bin = profile_dir.join(cand);
+        if bin.is_file() {
+            return bin;
+        }
+    }
+    panic!(
+        "resolve_runner_bin: bebop-bemu not found under {} (exe={})",
+        profile_dir.display(),
+        exe.display()
+    )
 }
 
 pub fn run_elf_regression<B, F>(

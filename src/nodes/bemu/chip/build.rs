@@ -24,8 +24,8 @@ fn main() {
         panic!("missing {}", proto.display());
     }
     fs::copy(&dispatch, out_dir.join("chip_balls.rs")).expect("copy dispatch.rs");
-    let proto_dir = proto.parent().expect("chip.proto parent");
-    prost_build::compile_protos(&[proto], &[proto_dir]).unwrap_or_else(|e| panic!("prost: {e}"));
+    let proto_dir = proto.parent().expect("chip.proto parent").to_path_buf();
+    prost_build::compile_protos(&[&proto], &[&proto_dir]).unwrap_or_else(|e| panic!("prost: {e}"));
     println!("cargo:rerun-if-changed={}", dispatch.display());
     println!("cargo:rerun-if-changed={}", pb.display());
     println!("cargo:rerun-if-changed={}", proto.display());

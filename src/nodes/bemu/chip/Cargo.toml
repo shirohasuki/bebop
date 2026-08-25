@@ -11,6 +11,11 @@ crate-type = ["rlib", "cdylib"]
 name = "bebop-bemu"
 path = "../../../../../../bebop/src/nodes/bemu/src/main.rs"
 
+[[test]]
+name = "test_bemu"
+path = "../../../../../../bebop/tests/test_bemu.rs"
+harness = false
+
 [dependencies]
 clap = { version = "4", features = ["derive"] }
 snafu = "0.8"
@@ -28,5 +33,16 @@ bebop-rushb = { path = "../../../../../../bebop/src/nodes/lib/rushB" }
 cc = { version = "1", features = ["parallel"] }
 prost-build = "0.13"
 
+[dev-dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+assert_cmd = "2"
+walkdir = "2"
+libtest-mimic = "0.8"
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+
 [features]
+default = ["bemu"]
 difftest = []
+bemu = []

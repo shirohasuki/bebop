@@ -4,19 +4,23 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 pub fn native_dir(manifest_dir: &Path) -> PathBuf {
-    let local = manifest_dir.join("native");
+    let start = fs::canonicalize(manifest_dir).unwrap_or_else(|_| manifest_dir.to_path_buf());
+    let local = start.join("native");
     if local.join("spike").exists() {
         return local;
     }
 
-    for dir in manifest_dir.ancestors() {
+    for dir in start.ancestors() {
         let repo_native = dir.join("bebop").join("src").join("nodes").join("bemu").join("native");
         if repo_native.join("spike").exists() {
             return repo_native;
         }
     }
 
-    panic!("BEMU native dir not found from {}.", manifest_dir.display());
+    panic!(
+        "missing Spike at {}/native/spike (nix develop in bebop/ clones it)",
+        start.display()
+    );
 }
 
 pub fn build_and_link(native_dir: &Path, spike_dir: &Path, build_dir: &Path, install_dir: &Path) {

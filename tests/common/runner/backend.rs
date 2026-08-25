@@ -107,7 +107,7 @@ impl BackendRunner for BemuBackend {
 
     fn match_case(&self, test_case: &ElfTestCase) -> bool {
         test_case.stem.ends_with("-rushB-bemu-run")
-            || test_case.stem.ends_with("singlecore-baremetal")
+            || test_case.stem.ends_with("-baremetal")
             || test_case.stem.ends_with("-linux")
     }
 
@@ -168,8 +168,7 @@ impl BackendRunner for VerilatorBackend {
 
     fn match_case(&self, test_case: &ElfTestCase) -> bool {
         test_case.stem.ends_with("-rushB-verilator-run")
-            || test_case.stem.ends_with("singlecore-baremetal")
-            || test_case.stem.ends_with("_singlecore-baremetal")
+            || test_case.stem.ends_with("-baremetal")
             || test_case.stem.ends_with("-linux")
     }
 
@@ -253,7 +252,7 @@ impl BackendRunner for P2eBackend {
     }
 
     fn match_case(&self, test_case: &ElfTestCase) -> bool {
-        test_case.stem.ends_with("singlecore-baremetal")
+        test_case.stem.ends_with("-baremetal")
             || (test_case.stem.starts_with("fw_payload-") && test_case.stem.ends_with("-pk"))
     }
 

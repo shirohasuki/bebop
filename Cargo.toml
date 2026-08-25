@@ -39,11 +39,18 @@ path = "tests/test_p2e.rs"
 harness = false
 required-features = ["p2e"]
 
+[[test]]
+name = "test_bemu"
+path = "tests/test_bemu.rs"
+harness = false
+required-features = ["bemu"]
+
 [features]
 default = []
 verilator = ["dep:bebop-verilator"]
 p2e = ["dep:bebop-p2e"]
 difftest = []
+bemu = []
 
 [dependencies]
 bebop-verilator = { path = "src/nodes/verilator", optional = true }

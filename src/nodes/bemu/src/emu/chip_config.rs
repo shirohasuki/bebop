@@ -29,19 +29,6 @@ pub struct BallDomainConfig {
     pub isa: Vec<BallIsaEntry>,
 }
 
-#[derive(Clone)]
-pub struct BallIdMapping {
-    pub ball_id: u32,
-    pub ball_class: String,
-}
-
-#[derive(Clone)]
-pub struct BallIsaEntry {
-    pub mnemonic: String,
-    pub funct7: u32,
-    pub bid: u32,
-}
-
 pub struct TileTopology {
     pub cores: Vec<(String, usize)>,
     pub virtual_bank_count: usize,
@@ -86,23 +73,8 @@ fn to_topology(core: &CoreInstance) -> Topology {
             mmio_read_width: mmio.read_width as usize,
         },
         ball_domain: BallDomainConfig {
-            mappings: ball
-                .mappings
-                .iter()
-                .map(|m| BallIdMapping {
-                    ball_id: m.ball_id,
-                    ball_class: m.ball_class.clone(),
-                })
-                .collect(),
-            isa: ball
-                .isa
-                .iter()
-                .map(|e| BallIsaEntry {
-                    mnemonic: e.mnemonic.clone(),
-                    funct7: e.funct7,
-                    bid: e.bid,
-                })
-                .collect(),
+            mappings: ball.mappings.iter().cloned().collect(),
+            isa: ball.isa.iter().cloned().collect(),
         },
     }
 }
