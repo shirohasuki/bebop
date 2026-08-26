@@ -29,6 +29,7 @@ const USER_STACK_SIZE: u64 = 8 * 1024 * 1024;
 const PK_PT_RESERVE: u64 = 16 * 1024 * 1024;
 const PK_HIGH_RESERVE: u64 = 64 * 1024 * 1024;
 const SYS_BRK: u64 = 214;
+const SYS_MUNMAP: u64 = 215;
 const SYS_MMAP: u64 = 222;
 
 pub struct SharedMemory {
@@ -614,6 +615,7 @@ struct PkVm {
     pt_end: u64,
     next_page: u64,
     page_end: u64,
+    free_pages: Vec<(u64, u64)>,
     maps: Vec<GuestMap>,
 }
 
@@ -625,6 +627,7 @@ impl PkVm {
             pt_end,
             next_page,
             page_end,
+            free_pages: Vec::new(),
             maps: Vec::new(),
         };
         vm.alloc_table(memory)?;
@@ -659,15 +662,21 @@ impl PkVm {
     }
 
     fn alloc_user_pages(&mut self, memory: &mut [u8], virt: u64, len: u64, flags: u64) -> Result<u64, String> {
-        let phys = self.next_page;
         let size = align_up(len, PAGE_SIZE);
-        self.next_page = self
-            .next_page
-            .checked_add(size)
-            .ok_or_else(|| "pk physical page allocator overflow".to_string())?;
-        if self.next_page > self.page_end {
-            return Err("pk user page reserve exhausted".to_string());
-        }
+        let phys = match self.take_free_pages(size) {
+            Some(phys) => phys,
+            None => {
+                let phys = self.next_page;
+                self.next_page = self
+                    .next_page
+                    .checked_add(size)
+                    .ok_or_else(|| "pk physical page allocator overflow".to_string())?;
+                if self.next_page > self.page_end {
+                    return Err("pk user page reserve exhausted".to_string());
+                }
+                phys
+            }
+        };
         let off = guest_offset(memory, phys)?;
         let end = off + size as usize;
         if end > memory.len() {
@@ -678,6 +687,26 @@ impl PkVm {
         memory[off..end].fill(0);
         self.map_range(memory, virt, phys, size, flags)?;
         Ok(phys)
+    }
+
+    fn free_user_pages(&mut self, virt: u64, len: u64) -> Result<(), String> {
+        let size = align_up(len, PAGE_SIZE);
+        let phys = self
+            .virt_to_phys(virt, size)
+            .ok_or_else(|| "pk munmap range is not mapped".to_string())?;
+        self.free_pages.push((phys, size));
+        Ok(())
+    }
+
+    fn take_free_pages(&mut self, size: u64) -> Option<u64> {
+        let index = self.free_pages.iter().position(|(_, len)| *len >= size)?;
+        let (phys, len) = self.free_pages[index];
+        if len == size {
+            self.free_pages.swap_remove(index);
+        } else {
+            self.free_pages[index] = (phys + size, len - size);
+        }
+        Some(phys)
     }
 
     fn write_user(&self, memory: &mut [u8], virt: u64, bytes: &[u8]) -> Result<(), String> {
@@ -917,6 +946,7 @@ fn map_syscall_result(
                 pk_vm.alloc_user_pages(memory, result, len, 0x2 | 0x4)?;
             }
         }
+        SYS_MUNMAP => pk_vm.free_user_pages(a0, a1)?,
         _ => {
             let _ = a0;
         }

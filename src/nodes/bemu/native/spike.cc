@@ -377,6 +377,9 @@ static int fail_unhandled_trap(spike_context_t* ctx, trap_t& trap) {
 static int handle_trap(spike_context_t* ctx, trap_t& trap) {
     if (is_ecall_cause(trap.cause())) {
         ctx->state->XPR.write(10, handle_guest_syscall(ctx));
+        if (ctx->pk_mode) {
+            ctx->proc->get_mmu()->flush_tlb();
+        }
         ctx->state->pc = trap_epc(ctx, trap) + 4;
         if (ctx->pk_mode) {
             ctx->proc->set_privilege(PRV_U, false);
