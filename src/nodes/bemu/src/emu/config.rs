@@ -116,4 +116,16 @@ pub mod ball_domain {
                 .map(|entry| entry.funct7)
         })
     }
+
+    pub fn out_bw(ball_class: &str) -> usize {
+        with_topology(|topology| {
+            topology
+                .ball_domain
+                .mappings
+                .iter()
+                .find(|mapping| mapping.ball_class == ball_class)
+                .unwrap_or_else(|| panic!("missing Ball mapping for {ball_class}"))
+                .out_bw as usize
+        })
+    }
 }

@@ -7,6 +7,16 @@ pub fn run_vvac(out_dir: &Path, sourceme: &Path, flist: &Path, top: &str) {
         r#"clang_format_bin="$(command -v clang-format || true)"
 clang_format_bin="${{clang_format_bin%/*}}"
 source {sourceme}
+if [ -z "$HPEC_HOME" ]; then
+    echo "HPEC_HOME not set after sourceme" >&2
+    exit 1
+fi
+cc_bin="$HPEC_HOME/tools/gcc-8.3.0/gcc-8.3.0/bin/gcc"
+cxx_bin="$HPEC_HOME/tools/gcc-8.3.0/gcc-8.3.0/bin/g++"
+if [ ! -x "$cc_bin" ] || [ ! -x "$cxx_bin" ]; then
+    echo "HPE gcc not found: $cc_bin $cxx_bin" >&2
+    exit 1
+fi
 vvac_bin="$(command -v vvac || true)"
 vvac_bin="${{vvac_bin%/*}}"
 filtered_path=()
@@ -18,8 +28,11 @@ for path_entry in "${{path_entries[@]}}"; do
     esac
 done
 PATH="$(IFS=:; printf '%s' "${{filtered_path[*]}}")"
-PATH="/usr/bin:/bin:${{vvac_bin}}:$PATH"
+PATH="${{vvac_bin}}:$PATH"
 export PATH
+unset CMAKE_C_COMPILER CMAKE_CXX_COMPILER NIX_CC
+export CC="$cc_bin"
+export CXX="$cxx_bin"
 vvac -bc -f {flist} -top {top}"#,
         sourceme = sourceme.display(),
         flist = flist.display(),
