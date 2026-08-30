@@ -2,7 +2,7 @@ use std::cell::RefCell;
 
 mod chip_config;
 
-pub use chip_config::{tile_topology, TileTopology, Topology};
+pub use chip_config::{rushb_endpoint, tile_topology, TileTopology, Topology};
 
 thread_local! {
     static TOPOLOGY: RefCell<Option<Topology>> = const { RefCell::new(None) };

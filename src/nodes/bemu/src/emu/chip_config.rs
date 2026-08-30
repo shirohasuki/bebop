@@ -1,3 +1,4 @@
+use bebop_rushb::decode_accelerator_id;
 use prost::Message;
 use std::path::PathBuf;
 
@@ -31,6 +32,11 @@ pub struct BallDomainConfig {
 
 pub struct TileTopology {
     pub cores: Vec<(String, usize)>,
+    pub virtual_bank_count: usize,
+}
+
+pub struct RushBEndpoint {
+    pub core_index: usize,
     pub virtual_bank_count: usize,
 }
 
@@ -94,6 +100,43 @@ pub fn topology_for_core(core_index: usize) -> Topology {
         )
     });
     to_topology(core)
+}
+
+pub fn rushb_endpoint(accelerator_id: u32) -> RushBEndpoint {
+    let (tile_id, local_id) = decode_accelerator_id(accelerator_id);
+    let c = chip();
+    let tile = c.tiles.get(tile_id as usize).unwrap_or_else(|| {
+        panic!(
+            "rushB accelerator {accelerator_id}: tile {tile_id} out of range (n={})",
+            c.tiles.len()
+        )
+    });
+    let core_index = *tile.core_indices.get(local_id as usize).unwrap_or_else(|| {
+        panic!(
+            "rushB accelerator {accelerator_id}: local Core {local_id} out of range for tile {tile_id} (n={})",
+            tile.core_indices.len()
+        )
+    }) as usize;
+    let core = c.cores.get(core_index).unwrap_or_else(|| {
+        panic!(
+            "rushB accelerator {accelerator_id}: Core index {core_index} out of range (n={})",
+            c.cores.len()
+        )
+    });
+    if core
+        .balldomain
+        .as_ref()
+        .map_or(true, |ball| ball.mappings.is_empty())
+    {
+        panic!("rushB accelerator {accelerator_id}: Core index {core_index} has no Buckyball mappings");
+    }
+    if tile.virtual_bank_count == 0 {
+        panic!("rushB accelerator {accelerator_id}: tile {tile_id} virtual_bank_count is 0");
+    }
+    RushBEndpoint {
+        core_index,
+        virtual_bank_count: tile.virtual_bank_count as usize,
+    }
 }
 
 pub fn tile_topology(tile_index: usize) -> TileTopology {

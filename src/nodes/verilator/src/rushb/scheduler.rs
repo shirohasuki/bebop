@@ -152,26 +152,35 @@ fn submit_available(
         };
 
         let dma_operation = std::mem::replace(&mut request.dma, DmaOperation::None);
-        let prepared_dma = match dma_operation {
-            DmaOperation::None => None,
-            DmaOperation::Mvin { spans, chunks } => {
-                let address = staging.allocate(request.chip_id, &spans)?;
+        let prepared_dma_result = match dma_operation {
+            DmaOperation::None => Ok(None),
+            DmaOperation::Mvin { spans, chunks } => staging.allocate(request.chip_id, &spans).and_then(|address| {
                 dma::write_staging(request.chip_id, address, &chunks)?;
                 request.xs2 = dma::staged_xs2(request.xs2, address);
-                Some(PreparedDma {
+                Ok(Some(PreparedDma {
                     address,
                     spans,
                     output: false,
-                })
-            }
-            DmaOperation::Mvout { spans } => {
-                let address = staging.allocate(request.chip_id, &spans)?;
+                }))
+            }),
+            DmaOperation::Mvout { spans } => staging.allocate(request.chip_id, &spans).map(|address| {
                 request.xs2 = dma::staged_xs2(request.xs2, address);
                 Some(PreparedDma {
                     address,
                     spans,
                     output: true,
                 })
+            }),
+        };
+        let prepared_dma = match prepared_dma_result {
+            Ok(prepared) => prepared,
+            Err(error) => {
+                let message = format!(
+                    "failed to prepare rushB DMA for command {}: {error}",
+                    request.command_id
+                );
+                let _ = request.response.send(Err(message.clone()));
+                return Err(message);
             }
         };
 

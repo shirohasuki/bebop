@@ -2,7 +2,7 @@ use bebop_bank_hash::bank_hash;
 use bebop_bemu_profile::{BemuProfile, BemuProfileReport};
 use bebop_dtb::DtbBuilder;
 use bebop_elf::{load_elf, LoadInfo, TlsInfo};
-use bebop_rushb::{FUNCT7_MSET, FUNCT7_MVIN, FUNCT7_MVOUT};
+use bebop_rushb::{FUNCT7_MSET, FUNCT7_MVIN, FUNCT7_MVIN_MMIO, FUNCT7_MVOUT};
 use bebop_syscall::{add_guest_mapping, handle_syscall_with_state, set_guest_mappings, SyscallState};
 use bebop_uart::Uart;
 use std::cell::Cell;
@@ -14,7 +14,10 @@ use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
-use crate::bank::{bank_num, bank_size, mmio_bank_num, mmio_bank_size, BankConfig, BankMap, MATRIX_SIZE};
+use crate::bank::{
+    bank_num, bank_row_bytes, bank_size, mmio_bank_num, mmio_bank_size, mmio_total_size, BankConfig, BankMap,
+    MATRIX_SIZE,
+};
 use crate::inst;
 use crate::trace::{with_trace_ptr, TraceConfig, TraceState};
 
@@ -258,6 +261,12 @@ enum HostCommand {
         host_ptr: usize,
         reply: mpsc::Sender<()>,
     },
+    MvinMmio {
+        xs1: u64,
+        packed_xs2: u64,
+        host_ptr: usize,
+        reply: mpsc::Sender<()>,
+    },
     Cycles {
         reply: mpsc::Sender<u64>,
     },
@@ -284,10 +293,12 @@ thread_local! {
 
 fn spawn_host_accelerator(accelerator_id: u32, chip_id: i32) -> HostAccelerator {
     assert_eq!(chip_id, 0, "rushB BEMU supports tile chip_id 0 only");
+    let endpoint = crate::config::rushb_endpoint(accelerator_id);
     let (commands, receiver) = mpsc::channel();
     let worker = thread::Builder::new()
         .name(format!("rushb-bemu-core-{accelerator_id}"))
         .spawn(move || {
+            crate::config::configure_core_with_virtual_bank_count(endpoint.core_index, endpoint.virtual_bank_count);
             let mut state = EmuState::new_host();
             while let Ok(command) = receiver.recv() {
                 match command {
@@ -317,6 +328,16 @@ fn spawn_host_accelerator(accelerator_id: u32, chip_id: i32) -> HostAccelerator 
                     } => {
                         state.total_lat += inst::decode::cycles_after_issue(FUNCT7_MVOUT, xs1, packed_xs2);
                         host_mvout(&mut state, xs1, packed_xs2, host_ptr as *mut u8);
+                        let _ = reply.send(());
+                    }
+                    HostCommand::MvinMmio {
+                        xs1,
+                        packed_xs2,
+                        host_ptr,
+                        reply,
+                    } => {
+                        state.total_lat += inst::decode::cycles_after_issue(FUNCT7_MVIN_MMIO, xs1, packed_xs2);
+                        host_mvin_mmio(&mut state, xs1, packed_xs2, host_ptr as *const u8);
                         let _ = reply.send(());
                     }
                     HostCommand::Cycles { reply } => {
@@ -448,6 +469,37 @@ fn host_mvin(state: &mut EmuState, xs1: u64, packed_xs2: u64, host_ptr: *const u
     state.bank_cfgs[bi].valid_rows = depth;
 }
 
+fn host_mvin_mmio(state: &mut EmuState, xs1: u64, packed_xs2: u64, host_ptr: *const u8) {
+    assert!(!host_ptr.is_null(), "mvin_mmio: null host pointer");
+    let rows = xs1 >> 30;
+    let mmio_addr = ((packed_xs2 >> 39) & 0x1_ffff) as usize;
+    let columns = ((packed_xs2 >> 56) & 0xff) as usize;
+    let bytes_per_row = bank_row_bytes();
+    assert!(rows > 0, "mvin_mmio: row count must be non-zero");
+    assert!(
+        (1..=bytes_per_row).contains(&columns),
+        "mvin_mmio: invalid column count"
+    );
+    assert!(
+        mmio_addr + rows as usize * bytes_per_row <= mmio_total_size(),
+        "mvin_mmio: MMIO range out of bounds"
+    );
+    unsafe {
+        for row in 0..rows as usize {
+            for byte in 0..bytes_per_row {
+                let address = mmio_addr + row * bytes_per_row + byte;
+                let bank = address % mmio_bank_num();
+                let offset = address / mmio_bank_num();
+                state.mmio_banks[bank][offset] = if byte < columns {
+                    *host_ptr.add(row * bytes_per_row + byte)
+                } else {
+                    0
+                };
+            }
+        }
+    }
+}
+
 fn host_mvout(state: &mut EmuState, xs1: u64, packed_xs2: u64, host_ptr: *mut u8) {
     use crate::inst::decode::{pbank, pbank_group, rs1_b0, rs1_iter, xs2_mem_stride};
 
@@ -541,6 +593,22 @@ pub extern "C" fn rushb_mvin(xs1: u64, packed_xs2: u64, host_ptr: *const c_void)
         let (reply, result) = mpsc::channel();
         commands
             .send(HostCommand::Mvin {
+                xs1,
+                packed_xs2,
+                host_ptr: host_ptr as usize,
+                reply,
+            })
+            .expect("rushB BEMU Core worker stopped");
+        result.recv().expect("rushB BEMU Core worker stopped");
+    });
+}
+
+#[cfg_attr(not(feature = "difftest"), no_mangle)]
+pub extern "C" fn rushb_mvin_mmio(xs1: u64, packed_xs2: u64, host_ptr: *const c_void) {
+    with_selected_accelerator(|commands| {
+        let (reply, result) = mpsc::channel();
+        commands
+            .send(HostCommand::MvinMmio {
                 xs1,
                 packed_xs2,
                 host_ptr: host_ptr as usize,

@@ -48,7 +48,13 @@ pub(crate) fn init() {
     let worker_cycles = Arc::clone(&cycles);
     let worker = std::thread::Builder::new()
         .name("rushb-npu-scheduler".to_string())
-        .spawn(move || scheduler::run(receiver, worker_cycles, ready_sender))
+        .spawn(move || {
+            let result = scheduler::run(receiver, worker_cycles, ready_sender);
+            if let Err(error) = &result {
+                eprintln!("rushB NPU scheduler failed: {error}");
+            }
+            result
+        })
         .expect("failed to start rushB NPU scheduler thread");
 
     match ready_receiver.recv() {
