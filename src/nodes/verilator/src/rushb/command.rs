@@ -14,8 +14,7 @@ pub(crate) struct CommandResponse {
 
 pub(crate) struct CommandRequest {
     pub(crate) command_id: u64,
-    pub(crate) accelerator_id: u32,
-    pub(crate) chip_id: i32,
+    pub(crate) core_id: u32,
     pub(crate) xs1: u64,
     pub(crate) xs2: u64,
     pub(crate) funct7: u32,
@@ -30,8 +29,7 @@ pub(crate) enum SchedulerMessage {
 }
 
 pub(crate) fn execute(
-    accelerator_id: u32,
-    chip_id: i32,
+    core_id: u32,
     xs1: u64,
     xs2: u64,
     funct7: u32,
@@ -42,8 +40,7 @@ pub(crate) fn execute(
     let (response, receiver) = mpsc::channel();
     let request = CommandRequest {
         command_id,
-        accelerator_id,
-        chip_id,
+        core_id,
         xs1,
         xs2,
         funct7,

@@ -1,8 +1,7 @@
 use super::state::BankConfig;
 use crate::ffi::{bbsim_host_memory_range, bbsim_host_memory_read, bbsim_host_memory_write};
-use std::collections::HashMap;
-
 const DMA_ADDR_MASK: u64 = (1_u64 << 39) - 1;
+const CHIP_ID: i32 = 0;
 
 #[derive(Debug)]
 pub(crate) struct DmaChunk {
@@ -35,7 +34,7 @@ struct StagingRegion {
 
 #[derive(Default)]
 pub(crate) struct StagingAllocator {
-    regions: HashMap<i32, StagingRegion>,
+    region: Option<StagingRegion>,
 }
 
 pub(crate) fn spans(config: BankConfig, xs1: u64, packed_xs2: u64) -> Vec<(usize, usize)> {
@@ -85,35 +84,35 @@ fn staging_bytes(spans: &[(usize, usize)]) -> Result<u64, String> {
 
 impl StagingAllocator {
     pub(crate) fn reset(&mut self) {
-        self.regions.clear();
+        self.region = None;
     }
 
-    pub(crate) fn allocate(&mut self, chip_id: i32, spans: &[(usize, usize)]) -> Result<u64, String> {
+    pub(crate) fn allocate(&mut self, spans: &[(usize, usize)]) -> Result<u64, String> {
         let bytes = staging_bytes(spans)?;
-        let region = if let Some(region) = self.regions.get_mut(&chip_id) {
+        let region = if let Some(region) = self.region.as_mut() {
             region
         } else {
             let mut base = 0;
             let mut size = 0;
             unsafe {
-                if !bbsim_host_memory_range(chip_id, &mut base, &mut size) {
-                    return Err(format!("BBSimDRAM is not initialized for chip {chip_id}"));
+                if !bbsim_host_memory_range(CHIP_ID, &mut base, &mut size) {
+                    return Err("BBSimDRAM is not initialized".to_string());
                 }
             }
             let end = base
                 .checked_add(size)
                 .ok_or_else(|| "BBSimDRAM address range overflow".to_string())?;
-            self.regions.insert(chip_id, StagingRegion { base, next: end });
-            self.regions.get_mut(&chip_id).expect("staging region was inserted")
+            self.region = Some(StagingRegion { base, next: end });
+            self.region.as_mut().expect("staging region was inserted")
         };
 
         let address = region
             .next
             .checked_sub(bytes)
-            .ok_or_else(|| format!("DMA staging space exhausted for chip {chip_id}"))?;
+            .ok_or_else(|| "DMA staging space exhausted".to_string())?;
         if address < region.base || address > DMA_ADDR_MASK {
             return Err(format!(
-                "DMA staging space exhausted or outside ISA address width: chip={chip_id} address=0x{address:x}"
+                "DMA staging space exhausted or outside ISA address width: address=0x{address:x}"
             ));
         }
         region.next = address;
@@ -139,11 +138,11 @@ pub(crate) unsafe fn restore_host(host: *mut u8, chunks: &[DmaChunk]) {
     }
 }
 
-pub(crate) fn write_staging(chip_id: i32, address: u64, chunks: &[DmaChunk]) -> Result<(), String> {
+pub(crate) fn write_staging(address: u64, chunks: &[DmaChunk]) -> Result<(), String> {
     for chunk in chunks {
         let ok = unsafe {
             bbsim_host_memory_write(
-                chip_id,
+                CHIP_ID,
                 address + chunk.offset as u64,
                 chunk.data.as_ptr(),
                 chunk.data.len() as u64,
@@ -151,7 +150,7 @@ pub(crate) fn write_staging(chip_id: i32, address: u64, chunks: &[DmaChunk]) -> 
         };
         if !ok {
             return Err(format!(
-                "mvin staging write exceeds BBSimDRAM: chip={chip_id} address=0x{:x}",
+                "mvin staging write exceeds BBSimDRAM: address=0x{:x}",
                 address + chunk.offset as u64
             ));
         }
@@ -159,14 +158,14 @@ pub(crate) fn write_staging(chip_id: i32, address: u64, chunks: &[DmaChunk]) -> 
     Ok(())
 }
 
-pub(crate) fn read_staging(chip_id: i32, address: u64, spans: &[(usize, usize)]) -> Result<Vec<DmaChunk>, String> {
+pub(crate) fn read_staging(address: u64, spans: &[(usize, usize)]) -> Result<Vec<DmaChunk>, String> {
     let mut chunks = Vec::with_capacity(spans.len());
     for &(offset, size) in spans {
         let mut data = vec![0u8; size];
-        let ok = unsafe { bbsim_host_memory_read(chip_id, address + offset as u64, data.as_mut_ptr(), size as u64) };
+        let ok = unsafe { bbsim_host_memory_read(CHIP_ID, address + offset as u64, data.as_mut_ptr(), size as u64) };
         if !ok {
             return Err(format!(
-                "mvout staging read exceeds BBSimDRAM: chip={chip_id} address=0x{:x}",
+                "mvout staging read exceeds BBSimDRAM: address=0x{:x}",
                 address + offset as u64
             ));
         }

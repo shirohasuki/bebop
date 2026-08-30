@@ -5,7 +5,6 @@ use bebop_elf::{load_elf, LoadInfo, TlsInfo};
 use bebop_rushb::{FUNCT7_MSET, FUNCT7_MVIN, FUNCT7_MVIN_MMIO, FUNCT7_MVOUT};
 use bebop_syscall::{add_guest_mapping, handle_syscall_with_state, set_guest_mappings, SyscallState};
 use bebop_uart::Uart;
-use std::cell::Cell;
 use std::collections::HashMap;
 use std::os::raw::{c_char, c_void};
 use std::path::Path;
@@ -273,30 +272,22 @@ enum HostCommand {
     Shutdown,
 }
 
-struct HostAccelerator {
-    chip_id: i32,
+struct HostCore {
     commands: mpsc::Sender<HostCommand>,
     worker: thread::JoinHandle<()>,
 }
 
 struct HostState {
-    accelerators: HashMap<u32, HostAccelerator>,
+    cores: HashMap<u32, HostCore>,
 }
 
 static HOST_STATE: once_cell::sync::Lazy<Mutex<Option<HostState>>> = once_cell::sync::Lazy::new(|| Mutex::new(None));
 
-thread_local! {
-    // Selection belongs to the host caller. A global selected Core would race
-    // when two host graph workers call the native ABI concurrently.
-    static HOST_SELECTION: Cell<(u32, i32)> = const { Cell::new((0, 0)) };
-}
-
-fn spawn_host_accelerator(accelerator_id: u32, chip_id: i32) -> HostAccelerator {
-    assert_eq!(chip_id, 0, "rushB BEMU supports tile chip_id 0 only");
-    let endpoint = crate::config::rushb_endpoint(accelerator_id);
+fn spawn_host_core(core_id: u32) -> HostCore {
+    let endpoint = crate::config::rushb_endpoint(core_id);
     let (commands, receiver) = mpsc::channel();
     let worker = thread::Builder::new()
-        .name(format!("rushb-bemu-core-{accelerator_id}"))
+        .name(format!("rushb-bemu-core-{core_id}"))
         .spawn(move || {
             crate::config::configure_core_with_virtual_bank_count(endpoint.core_index, endpoint.virtual_bank_count);
             let mut state = EmuState::new_host();
@@ -345,7 +336,7 @@ fn spawn_host_accelerator(accelerator_id: u32, chip_id: i32) -> HostAccelerator 
                     }
                     HostCommand::Shutdown => {
                         eprintln!(
-                            "[INFO] rushB BEMU Core {accelerator_id}: instructions={} matrix={} cycles={}",
+                            "[INFO] rushB BEMU Core {core_id}: instructions={} matrix={} cycles={}",
                             state.npu_instruction_id, state.matrix_instruction_count, state.total_lat
                         );
                         break;
@@ -354,23 +345,14 @@ fn spawn_host_accelerator(accelerator_id: u32, chip_id: i32) -> HostAccelerator 
             }
         })
         .expect("failed to start rushB BEMU Core worker");
-    HostAccelerator {
-        chip_id,
-        commands,
-        worker,
-    }
+    HostCore { commands, worker }
 }
 
-fn with_selected_accelerator<R>(f: impl FnOnce(&mpsc::Sender<HostCommand>) -> R) -> R {
-    let (accelerator_id, chip_id) = HOST_SELECTION.with(Cell::get);
+fn with_core<R>(core_id: u32, f: impl FnOnce(&mpsc::Sender<HostCommand>) -> R) -> R {
     let mut guard = HOST_STATE.lock().expect("rushB BEMU state poisoned");
     let state = guard.as_mut().expect("rushB is not initialized; call rushb_init first");
-    let accelerator = state
-        .accelerators
-        .entry(accelerator_id)
-        .or_insert_with(|| spawn_host_accelerator(accelerator_id, chip_id));
-    assert_eq!(accelerator.chip_id, chip_id, "rushB Core cannot move between chips");
-    f(&accelerator.commands)
+    let core = state.cores.entry(core_id).or_insert_with(|| spawn_host_core(core_id));
+    f(&core.commands)
 }
 
 fn consumes_npu_instruction_id(funct7: u32) -> bool {
@@ -547,33 +529,23 @@ fn host_mvout(state: &mut EmuState, xs1: u64, packed_xs2: u64, host_ptr: *mut u8
 pub extern "C" fn rushb_init() {
     let mut guard = HOST_STATE.lock().expect("rushB BEMU state poisoned");
     assert!(guard.is_none(), "rushB BEMU is already initialized");
-    *guard = Some(HostState {
-        accelerators: HashMap::new(),
-    });
-    HOST_SELECTION.with(|selection| selection.set((0, 0)));
-}
-
-#[cfg_attr(not(feature = "difftest"), no_mangle)]
-pub extern "C" fn rushb_select_accelerator(accelerator_id: u32, chip_id: i32) {
-    assert_eq!(chip_id, 0, "rushB BEMU supports tile chip_id 0 only");
-    HOST_SELECTION.with(|selection| selection.set((accelerator_id, chip_id)));
-    with_selected_accelerator(|_| {});
+    *guard = Some(HostState { cores: HashMap::new() });
 }
 
 #[cfg_attr(not(feature = "difftest"), no_mangle)]
 pub extern "C" fn rushb_destroy() {
     let mut guard = HOST_STATE.lock().expect("rushB BEMU state poisoned");
     if let Some(state) = guard.take() {
-        for accelerator in state.accelerators.into_values() {
-            let _ = accelerator.commands.send(HostCommand::Shutdown);
-            accelerator.worker.join().expect("rushB BEMU Core worker panicked");
+        for core in state.cores.into_values() {
+            let _ = core.commands.send(HostCommand::Shutdown);
+            core.worker.join().expect("rushB BEMU Core worker panicked");
         }
     }
 }
 
 #[cfg_attr(not(feature = "difftest"), no_mangle)]
-pub extern "C" fn rushb_mset(xs1: u64, xs2: u64) {
-    with_selected_accelerator(|commands| {
+pub extern "C" fn rushb_mset(core_id: u32, xs1: u64, xs2: u64) {
+    with_core(core_id, |commands| {
         let (reply, result) = mpsc::channel();
         commands
             .send(HostCommand::Execute {
@@ -588,8 +560,8 @@ pub extern "C" fn rushb_mset(xs1: u64, xs2: u64) {
 }
 
 #[cfg_attr(not(feature = "difftest"), no_mangle)]
-pub extern "C" fn rushb_mvin(xs1: u64, packed_xs2: u64, host_ptr: *const c_void) {
-    with_selected_accelerator(|commands| {
+pub extern "C" fn rushb_mvin(core_id: u32, xs1: u64, packed_xs2: u64, host_ptr: *const c_void) {
+    with_core(core_id, |commands| {
         let (reply, result) = mpsc::channel();
         commands
             .send(HostCommand::Mvin {
@@ -604,8 +576,8 @@ pub extern "C" fn rushb_mvin(xs1: u64, packed_xs2: u64, host_ptr: *const c_void)
 }
 
 #[cfg_attr(not(feature = "difftest"), no_mangle)]
-pub extern "C" fn rushb_mvin_mmio(xs1: u64, packed_xs2: u64, host_ptr: *const c_void) {
-    with_selected_accelerator(|commands| {
+pub extern "C" fn rushb_mvin_mmio(core_id: u32, xs1: u64, packed_xs2: u64, host_ptr: *const c_void) {
+    with_core(core_id, |commands| {
         let (reply, result) = mpsc::channel();
         commands
             .send(HostCommand::MvinMmio {
@@ -620,8 +592,8 @@ pub extern "C" fn rushb_mvin_mmio(xs1: u64, packed_xs2: u64, host_ptr: *const c_
 }
 
 #[cfg_attr(not(feature = "difftest"), no_mangle)]
-pub extern "C" fn rushb_mvout(xs1: u64, packed_xs2: u64, host_ptr: *mut c_void) {
-    with_selected_accelerator(|commands| {
+pub extern "C" fn rushb_mvout(core_id: u32, xs1: u64, packed_xs2: u64, host_ptr: *mut c_void) {
+    with_core(core_id, |commands| {
         let (reply, result) = mpsc::channel();
         commands
             .send(HostCommand::Mvout {
@@ -636,8 +608,8 @@ pub extern "C" fn rushb_mvout(xs1: u64, packed_xs2: u64, host_ptr: *mut c_void) 
 }
 
 #[cfg_attr(not(feature = "difftest"), no_mangle)]
-pub extern "C" fn rushb_custom(xs1: u64, xs2: u64, funct7: u32) {
-    with_selected_accelerator(|commands| {
+pub extern "C" fn rushb_custom(core_id: u32, xs1: u64, xs2: u64, funct7: u32) {
+    with_core(core_id, |commands| {
         let (reply, result) = mpsc::channel();
         commands
             .send(HostCommand::Execute {
@@ -652,22 +624,14 @@ pub extern "C" fn rushb_custom(xs1: u64, xs2: u64, funct7: u32) {
 }
 
 #[cfg_attr(not(feature = "difftest"), no_mangle)]
-pub extern "C" fn rushb_cycles() -> u64 {
-    let guard = HOST_STATE.lock().expect("rushB BEMU state poisoned");
-    let state = guard.as_ref().expect("rushB is not initialized; call rushb_init first");
-    state
-        .accelerators
-        .values()
-        .map(|accelerator| {
-            let (reply, result) = mpsc::channel();
-            accelerator
-                .commands
-                .send(HostCommand::Cycles { reply })
-                .expect("rushB BEMU Core worker stopped");
-            result.recv().expect("rushB BEMU Core worker stopped")
-        })
-        .max()
-        .unwrap_or(0)
+pub extern "C" fn rushb_cycles(core_id: u32) -> u64 {
+    with_core(core_id, |commands| {
+        let (reply, result) = mpsc::channel();
+        commands
+            .send(HostCommand::Cycles { reply })
+            .expect("rushB BEMU Core worker stopped");
+        result.recv().expect("rushB BEMU Core worker stopped")
+    })
 }
 
 #[derive(Clone, Copy)]
