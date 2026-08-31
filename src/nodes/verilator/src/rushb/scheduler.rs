@@ -15,7 +15,7 @@ const POST_RESET_SETTLE_CYCLES: u64 = 4_096;
 const MAX_WAIT_CYCLES: u64 = 100_000_000;
 
 #[derive(Default)]
-struct AcceleratorQueue {
+struct CoreQueue {
     queued: VecDeque<CommandRequest>,
     active: Option<ActiveCommand>,
     completion_wait: Option<CompletionWait>,
@@ -57,7 +57,7 @@ pub(crate) fn run(
         .send(Ok(()))
         .map_err(|_| "rushB host disappeared during scheduler initialization".to_string())?;
 
-    let mut queues = HashMap::<u32, AcceleratorQueue>::new();
+    let mut queues = HashMap::<u32, CoreQueue>::new();
     let mut staging = StagingAllocator::default();
     let mut shutdown = None;
 
@@ -99,7 +99,7 @@ pub(crate) fn run(
 
 fn drain_messages(
     receiver: &mpsc::Receiver<SchedulerMessage>,
-    queues: &mut HashMap<u32, AcceleratorQueue>,
+    queues: &mut HashMap<u32, CoreQueue>,
     shutdown: &mut Option<mpsc::Sender<Result<(), String>>>,
 ) -> Result<(), String> {
     while let Ok(message) = receiver.try_recv() {
@@ -110,7 +110,7 @@ fn drain_messages(
 
 fn handle_message(
     message: SchedulerMessage,
-    queues: &mut HashMap<u32, AcceleratorQueue>,
+    queues: &mut HashMap<u32, CoreQueue>,
     shutdown: &mut Option<mpsc::Sender<Result<(), String>>>,
 ) -> Result<(), String> {
     match message {
@@ -120,11 +120,7 @@ fn handle_message(
                     .response
                     .send(Err("rushB NPU scheduler is shutting down".to_string()));
             } else {
-                queues
-                    .entry(request.accelerator_id)
-                    .or_default()
-                    .queued
-                    .push_back(request);
+                queues.entry(request.core_id).or_default().queued.push_back(request);
             }
         }
         SchedulerMessage::Shutdown(reply) => {
@@ -137,13 +133,13 @@ fn handle_message(
 }
 
 fn submit_available(
-    queues: &mut HashMap<u32, AcceleratorQueue>,
+    queues: &mut HashMap<u32, CoreQueue>,
     staging: &mut StagingAllocator,
     cycle: u64,
 ) -> Result<(), String> {
-    let accelerator_ids = queues.keys().copied().collect::<Vec<_>>();
-    for accelerator_id in accelerator_ids {
-        let queue = queues.get_mut(&accelerator_id).expect("accelerator queue exists");
+    let core_ids = queues.keys().copied().collect::<Vec<_>>();
+    for core_id in core_ids {
+        let queue = queues.get_mut(&core_id).expect("Core queue exists");
         if queue.active.is_some() || queue.completion_wait.is_some() {
             continue;
         }
@@ -152,31 +148,40 @@ fn submit_available(
         };
 
         let dma_operation = std::mem::replace(&mut request.dma, DmaOperation::None);
-        let prepared_dma = match dma_operation {
-            DmaOperation::None => None,
-            DmaOperation::Mvin { spans, chunks } => {
-                let address = staging.allocate(request.chip_id, &spans)?;
-                dma::write_staging(request.chip_id, address, &chunks)?;
+        let prepared_dma_result = match dma_operation {
+            DmaOperation::None => Ok(None),
+            DmaOperation::Mvin { spans, chunks } => staging.allocate(&spans).and_then(|address| {
+                dma::write_staging(address, &chunks)?;
                 request.xs2 = dma::staged_xs2(request.xs2, address);
-                Some(PreparedDma {
+                Ok(Some(PreparedDma {
                     address,
                     spans,
                     output: false,
-                })
-            }
-            DmaOperation::Mvout { spans } => {
-                let address = staging.allocate(request.chip_id, &spans)?;
+                }))
+            }),
+            DmaOperation::Mvout { spans } => staging.allocate(&spans).map(|address| {
                 request.xs2 = dma::staged_xs2(request.xs2, address);
                 Some(PreparedDma {
                     address,
                     spans,
                     output: true,
                 })
+            }),
+        };
+        let prepared_dma = match prepared_dma_result {
+            Ok(prepared) => prepared,
+            Err(error) => {
+                let message = format!(
+                    "failed to prepare rushB DMA for command {}: {error}",
+                    request.command_id
+                );
+                let _ = request.response.send(Err(message.clone()));
+                return Err(message);
             }
         };
 
-        let accepted_before = unsafe { verilator_rushb_accepted(accelerator_id) };
-        unsafe { verilator_rushb_submit(accelerator_id, request.xs1, request.xs2, request.funct7) };
+        let accepted_before = unsafe { verilator_rushb_accepted(core_id) };
+        unsafe { verilator_rushb_submit(core_id, request.xs1, request.xs2, request.funct7) };
         queue.active = Some(ActiveCommand {
             request,
             accepted_before,
@@ -187,27 +192,27 @@ fn submit_available(
     Ok(())
 }
 
-fn process_accepts(queues: &mut HashMap<u32, AcceleratorQueue>, cycle: u64) -> Result<(), String> {
-    let accelerator_ids = queues.keys().copied().collect::<Vec<_>>();
-    for accelerator_id in accelerator_ids {
-        let queue = queues.get_mut(&accelerator_id).expect("accelerator queue exists");
+fn process_accepts(queues: &mut HashMap<u32, CoreQueue>, cycle: u64) -> Result<(), String> {
+    let core_ids = queues.keys().copied().collect::<Vec<_>>();
+    for core_id in core_ids {
+        let queue = queues.get_mut(&core_id).expect("Core queue exists");
         let Some(active) = queue.active.as_ref() else {
             continue;
         };
-        let accepted = unsafe { verilator_rushb_accepted(accelerator_id) };
+        let accepted = unsafe { verilator_rushb_accepted(core_id) };
         if accepted == active.accepted_before {
             continue;
         }
         if accepted != active.accepted_before + 1 {
             return Err(format!(
-                "rushB accepted counter skipped for accelerator {accelerator_id}: before={} after={accepted}",
+                "rushB accepted counter skipped for Core {core_id}: before={} after={accepted}",
                 active.accepted_before
             ));
         }
 
         let active = queue.active.take().expect("active command exists");
         if active.request.funct7 == FUNCT7_FENCE {
-            unsafe { verilator_rushb_complete_on_accept(accelerator_id) };
+            unsafe { verilator_rushb_complete_on_accept(core_id) };
         }
         match active.request.wait {
             WaitMode::Accepted => {
@@ -226,22 +231,20 @@ fn process_accepts(queues: &mut HashMap<u32, AcceleratorQueue>, cycle: u64) -> R
     Ok(())
 }
 
-fn process_completions(queues: &mut HashMap<u32, AcceleratorQueue>, _cycle: u64) -> Result<(), String> {
-    let accelerator_ids = queues.keys().copied().collect::<Vec<_>>();
-    for accelerator_id in accelerator_ids {
-        let queue = queues.get_mut(&accelerator_id).expect("accelerator queue exists");
+fn process_completions(queues: &mut HashMap<u32, CoreQueue>, _cycle: u64) -> Result<(), String> {
+    let core_ids = queues.keys().copied().collect::<Vec<_>>();
+    for core_id in core_ids {
+        let queue = queues.get_mut(&core_id).expect("Core queue exists");
         let Some(waiting) = queue.completion_wait.as_ref() else {
             continue;
         };
-        let completed = unsafe { verilator_rushb_completed(accelerator_id) };
+        let completed = unsafe { verilator_rushb_completed(core_id) };
         if completed < waiting.target_completed {
             continue;
         }
         let waiting = queue.completion_wait.take().expect("completion waiter exists");
         let output = match waiting.prepared_dma {
-            Some(prepared) if prepared.output => {
-                dma::read_staging(waiting.request.chip_id, prepared.address, &prepared.spans)?
-            }
+            Some(prepared) if prepared.output => dma::read_staging(prepared.address, &prepared.spans)?,
             _ => Vec::new(),
         };
         let _ = waiting.request.response.send(Ok(CommandResponse { output }));
@@ -249,55 +252,55 @@ fn process_completions(queues: &mut HashMap<u32, AcceleratorQueue>, _cycle: u64)
     Ok(())
 }
 
-fn check_timeouts(queues: &HashMap<u32, AcceleratorQueue>, cycle: u64) -> Result<(), String> {
-    for (&accelerator_id, queue) in queues {
+fn check_timeouts(queues: &HashMap<u32, CoreQueue>, cycle: u64) -> Result<(), String> {
+    for (&core_id, queue) in queues {
         if let Some(active) = &queue.active {
             if cycle.saturating_sub(active.started_cycle) >= MAX_WAIT_CYCLES {
-                return Err(timeout_message(accelerator_id, &active.request, "acceptance"));
+                return Err(timeout_message(core_id, &active.request, "acceptance"));
             }
         }
         if let Some(waiting) = &queue.completion_wait {
             if cycle.saturating_sub(waiting.started_cycle) >= MAX_WAIT_CYCLES {
-                return Err(timeout_message(accelerator_id, &waiting.request, "completion"));
+                return Err(timeout_message(core_id, &waiting.request, "completion"));
             }
         }
     }
     Ok(())
 }
 
-fn timeout_message(accelerator_id: u32, request: &CommandRequest, phase: &str) -> String {
+fn timeout_message(core_id: u32, request: &CommandRequest, phase: &str) -> String {
     unsafe {
         format!(
-            "rushB NPU scheduler timed out waiting for {phase}: command={} accelerator={} funct7={} xs1=0x{:016x} xs2=0x{:016x} probes={} accepted={} completed={} inflight={} ready={} retired={}",
+            "rushB NPU scheduler timed out waiting for {phase}: command={} core={} funct7={} xs1=0x{:016x} xs2=0x{:016x} probes={} accepted={} completed={} inflight={} ready={} retired={}",
             request.command_id,
-            accelerator_id,
+            core_id,
             request.funct7,
             request.xs1,
             request.xs2,
-            verilator_rushb_probes(accelerator_id),
-            verilator_rushb_accepted(accelerator_id),
-            verilator_rushb_completed(accelerator_id),
-            verilator_rushb_inflight(accelerator_id),
-            verilator_rushb_last_ready(accelerator_id),
-            verilator_rushb_last_retired(accelerator_id),
+            verilator_rushb_probes(core_id),
+            verilator_rushb_accepted(core_id),
+            verilator_rushb_completed(core_id),
+            verilator_rushb_inflight(core_id),
+            verilator_rushb_last_ready(core_id),
+            verilator_rushb_last_retired(core_id),
         )
     }
 }
 
-fn all_inflight_zero(queues: &HashMap<u32, AcceleratorQueue>) -> bool {
+fn all_inflight_zero(queues: &HashMap<u32, CoreQueue>) -> bool {
     queues
         .keys()
-        .all(|&accelerator_id| unsafe { verilator_rushb_inflight(accelerator_id) == 0 })
+        .all(|&core_id| unsafe { verilator_rushb_inflight(core_id) == 0 })
 }
 
-fn is_drained(queues: &HashMap<u32, AcceleratorQueue>) -> bool {
+fn is_drained(queues: &HashMap<u32, CoreQueue>) -> bool {
     queues
         .values()
         .all(|queue| queue.queued.is_empty() && queue.active.is_none() && queue.completion_wait.is_none())
         && all_inflight_zero(queues)
 }
 
-fn has_runtime_work(queues: &HashMap<u32, AcceleratorQueue>) -> bool {
+fn has_runtime_work(queues: &HashMap<u32, CoreQueue>) -> bool {
     queues
         .values()
         .any(|queue| !queue.queued.is_empty() || queue.active.is_some() || queue.completion_wait.is_some())

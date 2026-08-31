@@ -38,14 +38,14 @@ extern "C" {
 
     // rushB command bridge.
     pub fn verilator_rushb_clear();
-    pub fn verilator_rushb_submit(accelerator_id: u32, xs1: u64, xs2: u64, funct7: u32);
-    pub fn verilator_rushb_accepted(accelerator_id: u32) -> u64;
-    pub fn verilator_rushb_complete_on_accept(accelerator_id: u32);
-    pub fn verilator_rushb_completed(accelerator_id: u32) -> u64;
-    pub fn verilator_rushb_inflight(accelerator_id: u32) -> u64;
-    pub fn verilator_rushb_probes(accelerator_id: u32) -> u64;
-    pub fn verilator_rushb_last_ready(accelerator_id: u32) -> bool;
-    pub fn verilator_rushb_last_retired(accelerator_id: u32) -> bool;
+    pub fn verilator_rushb_submit(core_id: u32, xs1: u64, xs2: u64, funct7: u32);
+    pub fn verilator_rushb_accepted(core_id: u32) -> u64;
+    pub fn verilator_rushb_complete_on_accept(core_id: u32);
+    pub fn verilator_rushb_completed(core_id: u32) -> u64;
+    pub fn verilator_rushb_inflight(core_id: u32) -> u64;
+    pub fn verilator_rushb_probes(core_id: u32) -> u64;
+    pub fn verilator_rushb_last_ready(core_id: u32) -> bool;
+    pub fn verilator_rushb_last_retired(core_id: u32) -> bool;
 
     // BBSimDRAM host staging API. These functions reject addresses outside
     // the physical backing region instead of exposing its raw mmap pointer.
