@@ -1,5 +1,5 @@
-use super::command::SchedulerMessage;
 use super::scheduler;
+use bebop_rushb::RushMessage;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
@@ -12,7 +12,7 @@ pub(crate) struct BankConfig {
 }
 
 struct SchedulerHandle {
-    sender: mpsc::Sender<SchedulerMessage>,
+    sender: mpsc::Sender<RushMessage>,
     cycles: Arc<AtomicU64>,
     worker: JoinHandle<Result<(), String>>,
 }
@@ -68,7 +68,7 @@ pub(crate) fn destroy() {
     let (reply, receiver) = mpsc::channel();
     handle
         .sender
-        .send(SchedulerMessage::Shutdown(reply))
+        .send(RushMessage::Shutdown(reply))
         .expect("rushB NPU scheduler stopped before shutdown");
     receiver
         .recv()
@@ -82,7 +82,7 @@ pub(crate) fn destroy() {
     *BANK_CONFIGS.lock().expect("rushB bank metadata poisoned") = None;
 }
 
-pub(crate) fn send(message: SchedulerMessage) -> Result<(), String> {
+pub(crate) fn send(message: RushMessage) -> Result<(), String> {
     let sender = SCHEDULER
         .lock()
         .map_err(|_| "rushB scheduler state poisoned".to_string())?

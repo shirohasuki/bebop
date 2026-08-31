@@ -1,4 +1,10 @@
-//! Shared Rust contract for the backend-neutral rushB host ABI.
+//! Backend-neutral rushB protocol and runtime.
+
+mod protocol;
+mod runtime;
+
+pub use protocol::{CommandId, DmaChunk, DmaOperation, RushCommand, RushEvent, RushEventKind, RushResponse, WaitMode};
+pub use runtime::{RushBackend, RushMessage, RushRequest, RushRuntime};
 
 pub const FUNCT7_FENCE: u32 = 0;
 pub const FUNCT7_MVOUT: u32 = 16;

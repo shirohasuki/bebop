@@ -1,24 +1,8 @@
 use super::state::BankConfig;
 use crate::ffi::{bbsim_host_memory_range, bbsim_host_memory_read, bbsim_host_memory_write};
+use bebop_rushb::DmaChunk;
 const DMA_ADDR_MASK: u64 = (1_u64 << 39) - 1;
 const CHIP_ID: i32 = 0;
-
-#[derive(Debug)]
-pub(crate) struct DmaChunk {
-    pub(crate) offset: usize,
-    pub(crate) data: Vec<u8>,
-}
-
-pub(crate) enum DmaOperation {
-    None,
-    Mvin {
-        spans: Vec<(usize, usize)>,
-        chunks: Vec<DmaChunk>,
-    },
-    Mvout {
-        spans: Vec<(usize, usize)>,
-    },
-}
 
 pub(crate) struct PreparedDma {
     pub(crate) address: u64,
