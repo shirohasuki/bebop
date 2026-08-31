@@ -13,7 +13,14 @@
 #include <vector>
 
 // Context management
-extern "C" void *verilator_context_new() { return new VerilatedContext; }
+extern "C" void *verilator_context_new() {
+  auto *context = new VerilatedContext;
+  // The generated BBSimHarness model is single-threaded. Verilator otherwise
+  // defaults to the host CPU count and creates an unused worker pool, which can
+  // leave repeated native rushB simulations blocked in the pool's futex wait.
+  context->threads(1);
+  return context;
+}
 
 extern "C" void verilator_context_free(void *ctx) {
   delete static_cast<VerilatedContext *>(ctx);
