@@ -1,32 +1,6 @@
-use super::dma::{DmaChunk, DmaOperation};
 use super::state;
+use bebop_rushb::{DmaOperation, RushCommand, RushMessage, RushRequest, RushResponse, WaitMode};
 use std::sync::mpsc;
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum WaitMode {
-    Accepted,
-    Completed,
-}
-
-pub(crate) struct CommandResponse {
-    pub(crate) output: Vec<DmaChunk>,
-}
-
-pub(crate) struct CommandRequest {
-    pub(crate) command_id: u64,
-    pub(crate) core_id: u32,
-    pub(crate) xs1: u64,
-    pub(crate) xs2: u64,
-    pub(crate) funct7: u32,
-    pub(crate) wait: WaitMode,
-    pub(crate) dma: DmaOperation,
-    pub(crate) response: mpsc::Sender<Result<CommandResponse, String>>,
-}
-
-pub(crate) enum SchedulerMessage {
-    Command(CommandRequest),
-    Shutdown(mpsc::Sender<Result<(), String>>),
-}
 
 pub(crate) fn execute(
     core_id: u32,
@@ -35,20 +9,22 @@ pub(crate) fn execute(
     funct7: u32,
     wait: WaitMode,
     dma: DmaOperation,
-) -> Result<CommandResponse, String> {
+) -> Result<RushResponse, String> {
     let command_id = state::next_command_id();
     let (response, receiver) = mpsc::channel();
-    let request = CommandRequest {
-        command_id,
-        core_id,
-        xs1,
-        xs2,
-        funct7,
+    let request = RushRequest {
+        command: RushCommand {
+            id: command_id,
+            core_id,
+            xs1,
+            xs2,
+            funct7,
+        },
         wait,
         dma,
         response,
     };
-    state::send(SchedulerMessage::Command(request))?;
+    state::send(RushMessage::Command(request))?;
     receiver
         .recv()
         .map_err(|_| format!("rushB NPU scheduler stopped while waiting for host command #{command_id}"))?

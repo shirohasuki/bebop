@@ -3,9 +3,7 @@ mod dma;
 mod scheduler;
 mod state;
 
-use bebop_rushb::{FUNCT7_MSET, FUNCT7_MVIN, FUNCT7_MVIN_MMIO, FUNCT7_MVOUT};
-use command::WaitMode;
-use dma::DmaOperation;
+use bebop_rushb::{DmaOperation, WaitMode, FUNCT7_MSET, FUNCT7_MVIN, FUNCT7_MVIN_MMIO, FUNCT7_MVOUT};
 use std::ffi::c_void;
 
 fn mvin_mmio_spans(rows: u64, columns: u64) -> (Vec<(usize, usize)>, Vec<(usize, usize)>) {
